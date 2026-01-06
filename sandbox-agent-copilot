@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# "Yolo-ish" defaults for Copilot CLI, relying on the Podman mount boundary for safety.
+# Users can call `sandbox-agent copilot ...` directly when they want tighter limits.
+exec sandbox-agent copilot \
+  --allow-all-tools \
+  --allow-all-paths \
+  --allow-all-urls \
+  --disable-builtin-mcps \
+  "$@"

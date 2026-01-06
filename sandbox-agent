@@ -1,0 +1,980 @@
+#!/usr/bin/env bash
+# sandbox-agent: run agent CLIs inside a Podman container with yolo-like defaults.
+
+set -euo pipefail
+
+# ----------------------------
+# Defaults (override via env or config)
+# ----------------------------
+: "${CODEX_CONTAINER_SANDBOX_IMAGE:=localhost/sandbox-agent:latest}"
+: "${CODEX_CONTAINER_SANDBOX_HOSTNAME:=sandbox-agent}"
+: "${CODEX_CONTAINER_SANDBOX_CONTAINER_HOME:=/home/codex}"
+: "${CODEX_CONTAINER_SANDBOX_STATE_DIR:=${XDG_STATE_HOME:-$HOME/.local/state}/sandbox-agent}"
+: "${CODEX_CONTAINER_SANDBOX_CONFIG_FILE:=${XDG_CONFIG_HOME:-$HOME/.config}/sandbox-agent/config.sh}"
+: "${CODEX_CONTAINER_SANDBOX_PODMAN:=podman}"
+: "${CODEX_CONTAINER_SANDBOX_PODMAN_RUNTIME:=}"
+: "${CODEX_CONTAINER_SANDBOX_AUTH_FILE:=}"
+: "${CODEX_CONTAINER_SANDBOX_AUTH_MOUNT_MODE:=ro}"
+: "${CODEX_CONTAINER_SANDBOX_DISABLE_AUTH_MOUNT:=0}"
+: "${CODEX_CONTAINER_SANDBOX_PROMPTS_DIR:=}"
+: "${CODEX_CONTAINER_SANDBOX_SKILLS_DIR:=}"
+: "${CODEX_CONTAINER_SANDBOX_DISABLE_PROMPTS_MOUNT:=0}"
+: "${CODEX_CONTAINER_SANDBOX_DISABLE_SKILLS_MOUNT:=0}"
+: "${CODEX_CONTAINER_SANDBOX_DISABLE_LOCAL_BIN_MOUNT:=0}"
+: "${CODEX_CONTAINER_SANDBOX_DISABLE_UV_TOOLS_MOUNT:=0}"
+: "${CODEX_CONTAINER_SANDBOX_DISABLE_UV_PYTHON_MOUNT:=0}"
+: "${CODEX_CONTAINER_SANDBOX_DISABLE_DNS_OVERRIDE:=0}"
+: "${CODEX_CONTAINER_SANDBOX_DISABLE_GIT_IDENTITY_SYNC:=0}"
+: "${CODEX_CONTAINER_SANDBOX_GIT_NAME:=}"
+: "${CODEX_CONTAINER_SANDBOX_GIT_EMAIL:=}"
+: "${CODEX_CONTAINER_SANDBOX_RESUME_FIRST_PROMPT:=}"
+: "${CODEX_CONTAINER_SANDBOX_PREFLIGHT_SCRIPT_REL:=tmp/sandbox-agent/preflight.sh}"
+: "${CODEX_CONTAINER_SANDBOX_DISABLE_YOLO_INJECTION:=0}"
+
+# If set to 1, prints the computed podman command.
+: "${CODEX_CONTAINER_SANDBOX_DEBUG:=0}"
+
+# If set to 1, prints the command invoked inside the container.
+# Default: on (so it's obvious what is being executed in-container).
+: "${CODEX_CONTAINER_SANDBOX_PRINT_CODEX_CMD:=1}"
+
+# If set to 1, keeps the container after exit (useful for debugging).
+: "${CODEX_CONTAINER_SANDBOX_PERSIST:=0}"
+
+# Extra mounts (arrays).
+SANDBOX_RO_MOUNTS=()
+SANDBOX_RW_MOUNTS=()
+
+# Pass-through env vars into container (only if present in host env).
+SANDBOX_ENV_PASSTHROUGH=()
+
+# ----------------------------
+# Load config (bash, optional)
+# ----------------------------
+if [[ -f "$CODEX_CONTAINER_SANDBOX_CONFIG_FILE" ]]; then
+  # shellcheck disable=SC1090
+  source "$CODEX_CONTAINER_SANDBOX_CONFIG_FILE"
+fi
+
+is_wsl() {
+  uname -r 2>/dev/null | grep -qiE 'microsoft|wsl'
+}
+
+# Resolve podman binary robustly (especially when Homebrew exists but shellenv
+# hasn't been loaded for this shell).
+if [[ "$CODEX_CONTAINER_SANDBOX_PODMAN" != */* ]]; then
+  if ! command -v "$CODEX_CONTAINER_SANDBOX_PODMAN" >/dev/null 2>&1; then
+    if [[ -x "/home/linuxbrew/.linuxbrew/bin/podman" ]]; then
+      CODEX_CONTAINER_SANDBOX_PODMAN="/home/linuxbrew/.linuxbrew/bin/podman"
+    fi
+  fi
+fi
+
+# If we're using Homebrew podman by absolute path, ensure Homebrew's bin is on
+# PATH so podman can locate helper binaries like `conmon`.
+if [[ "$CODEX_CONTAINER_SANDBOX_PODMAN" == "/home/linuxbrew/.linuxbrew/bin/podman" ]]; then
+  case ":${PATH:-}:" in
+    *":/home/linuxbrew/.linuxbrew/bin:"*) ;;
+    *) export PATH="/home/linuxbrew/.linuxbrew/bin:${PATH:-}" ;;
+  esac
+fi
+
+# Allow config to set these arrays using either bash arrays or whitespace-separated strings.
+if declare -p CODEX_CONTAINER_SANDBOX_RO_MOUNTS >/dev/null 2>&1; then
+  # shellcheck disable=SC2154
+  SANDBOX_RO_MOUNTS+=("${CODEX_CONTAINER_SANDBOX_RO_MOUNTS[@]}")
+elif [[ -n "${CODEX_CONTAINER_SANDBOX_RO_MOUNTS-}" ]]; then
+  # shellcheck disable=SC2206
+  SANDBOX_RO_MOUNTS+=(${CODEX_CONTAINER_SANDBOX_RO_MOUNTS})
+fi
+
+if declare -p CODEX_CONTAINER_SANDBOX_RW_MOUNTS >/dev/null 2>&1; then
+  # shellcheck disable=SC2154
+  SANDBOX_RW_MOUNTS+=("${CODEX_CONTAINER_SANDBOX_RW_MOUNTS[@]}")
+elif [[ -n "${CODEX_CONTAINER_SANDBOX_RW_MOUNTS-}" ]]; then
+  # shellcheck disable=SC2206
+  SANDBOX_RW_MOUNTS+=(${CODEX_CONTAINER_SANDBOX_RW_MOUNTS})
+fi
+
+if declare -p CODEX_CONTAINER_SANDBOX_ENV_PASSTHROUGH >/dev/null 2>&1; then
+  # shellcheck disable=SC2154
+  SANDBOX_ENV_PASSTHROUGH+=("${CODEX_CONTAINER_SANDBOX_ENV_PASSTHROUGH[@]}")
+elif [[ -n "${CODEX_CONTAINER_SANDBOX_ENV_PASSTHROUGH-}" ]]; then
+  # shellcheck disable=SC2206
+  SANDBOX_ENV_PASSTHROUGH+=(${CODEX_CONTAINER_SANDBOX_ENV_PASSTHROUGH})
+fi
+
+# ----------------------------
+# DNS defaults (WSL-friendly)
+#
+# We have observed intermittent DNS resolution failures inside short-lived,
+# non-interactive runs (e.g., `codex exec` tool invocations). These often stem
+# from inheriting unstable host/WSL DNS forwarders.
+#
+# By default, pin the container resolvers to:
+# - NextDNS (primary): 45.90.28.212, 45.90.30.212
+# - Cloudflare (secondary): 1.1.1.1
+# - Google (tertiary): 8.8.8.8
+#
+# Override in config with either:
+#   CODEX_CONTAINER_SANDBOX_DNS_SERVERS=(...)
+# or
+#   CODEX_CONTAINER_SANDBOX_DNS_SERVERS="ip1 ip2 ..."
+# Disable entirely with:
+#   CODEX_CONTAINER_SANDBOX_DISABLE_DNS_OVERRIDE=1
+# ----------------------------
+DNS_SERVERS_DEFAULT=(45.90.28.212 45.90.30.212 1.1.1.1 8.8.8.8)
+DNS_SERVERS=()
+if declare -p CODEX_CONTAINER_SANDBOX_DNS_SERVERS >/dev/null 2>&1; then
+  # shellcheck disable=SC2154
+  DNS_SERVERS+=("${CODEX_CONTAINER_SANDBOX_DNS_SERVERS[@]}")
+elif [[ -n "${CODEX_CONTAINER_SANDBOX_DNS_SERVERS-}" ]]; then
+  # shellcheck disable=SC2206
+  DNS_SERVERS+=(${CODEX_CONTAINER_SANDBOX_DNS_SERVERS})
+else
+  DNS_SERVERS+=("${DNS_SERVERS_DEFAULT[@]}")
+fi
+
+# ----------------------------
+# Helper: usage
+# ----------------------------
+usage() {
+  cat <<'EOF'
+sandbox-agent - run agent CLIs in a Podman container with yolo-like defaults
+
+USAGE
+  sandbox-agent [OPTIONS...] -- <tool> [TOOL_ARGS...]
+  sandbox-agent [OPTIONS...] <tool> [TOOL_ARGS...]        # (also works; -- is optional)
+  sandbox-agent [OPTIONS...] [CODEX_ARGS...]              # (compat) defaults to tool=codex if <tool> not specified
+
+OPTIONS
+  --image IMAGE    Podman image to run (default: $CODEX_CONTAINER_SANDBOX_IMAGE)
+  --ro PATH        Bind-mount PATH read-only (repeatable)
+  --rw PATH        Bind-mount PATH read-write (repeatable)
+  --state DIR      Host state dir for Codex HOME inside container
+  --debug          Print the computed podman command
+  --print-codex-cmd Print the computed container command (default)
+  --no-print-codex-cmd Disable printing the container command
+  --persist        Do not --rm the container (keeps it for inspection)
+  --shell          Start an interactive bash shell in the container (equivalent to: sandbox-agent bash)
+  -h, --help       Show this help
+
+NOTES
+  - Allowed tools: codex, copilot, opencode, zsh, bash
+  - By default (tool=codex), injects: --dangerously-bypass-approvals-and-sandbox and --sandbox danger-full-access.
+  - For debugging only, you can disable this injection by setting CODEX_CONTAINER_SANDBOX_DISABLE_YOLO_INJECTION=1.
+  - Networking is enabled (no egress restrictions).
+  - For codex, web search tool is enabled (via `codex --search`).
+  - Ensures `{workspace}/tmp/...` artifact folders exist (including `tmp/fetched/...`) and are ignored via `.git/info/exclude` when possible.
+EOF
+}
+
+# ----------------------------
+# Parse args
+# ----------------------------
+RUN_SHELL=0
+RAW_ARGS=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --image) CODEX_CONTAINER_SANDBOX_IMAGE="${2:?missing IMAGE}"; shift 2 ;;
+    --ro) SANDBOX_RO_MOUNTS+=("${2:?missing PATH}"); shift 2 ;;
+    --rw) SANDBOX_RW_MOUNTS+=("${2:?missing PATH}"); shift 2 ;;
+    --state) CODEX_CONTAINER_SANDBOX_STATE_DIR="${2:?missing DIR}"; shift 2 ;;
+    --debug) CODEX_CONTAINER_SANDBOX_DEBUG=1; shift ;;
+    --print-codex-cmd) CODEX_CONTAINER_SANDBOX_PRINT_CODEX_CMD=1; shift ;;
+    --no-print-codex-cmd) CODEX_CONTAINER_SANDBOX_PRINT_CODEX_CMD=0; shift ;;
+    --persist) CODEX_CONTAINER_SANDBOX_PERSIST=1; shift ;;
+    --shell) RUN_SHELL=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    --) shift; RAW_ARGS+=("$@"); break ;;
+    *) RAW_ARGS+=("$1"); shift ;;
+  esac
+done
+
+TARGET_TOOL=""
+TARGET_ARGS=()
+if [[ "$RUN_SHELL" -eq 1 ]]; then
+  TARGET_TOOL="bash"
+elif [[ "${#RAW_ARGS[@]}" -ge 1 ]]; then
+  case "${RAW_ARGS[0]}" in
+    codex|copilot|opencode|zsh|bash)
+      TARGET_TOOL="${RAW_ARGS[0]}"
+      TARGET_ARGS=( "${RAW_ARGS[@]:1}" )
+      ;;
+    *)
+      TARGET_TOOL="codex"
+      TARGET_ARGS=( "${RAW_ARGS[@]}" )
+      ;;
+  esac
+else
+  TARGET_TOOL="codex"
+  TARGET_ARGS=()
+fi
+
+CODEX_ARGS=()
+if [[ "$TARGET_TOOL" == "codex" ]]; then
+  CODEX_ARGS=( "${TARGET_ARGS[@]}" )
+
+# ----------------------------
+# Normalize web-search config flags (best-effort)
+#
+# Users sometimes try:
+#   --config web_search_request=true
+# but the feature config key is `features.web_search_request` and there is also
+# a first-class `--enable web_search_request` / `--disable web_search_request`.
+#
+# Treat `--config web_search_request=true|false` as an alias to enable/disable.
+# This avoids a common footgun where search looks "enabled" but the tool isn't.
+# ----------------------------
+normalized_args=()
+i=0
+while [[ "$i" -lt "${#CODEX_ARGS[@]}" ]]; do
+  arg="${CODEX_ARGS[$i]}"
+  next="${CODEX_ARGS[$((i+1))]-}"
+
+  if [[ "$arg" == "--config" || "$arg" == "-c" ]]; then
+    if [[ "$next" == web_search_request=true ]]; then
+      normalized_args+=( --enable web_search_request )
+      i=$((i + 2))
+      continue
+    elif [[ "$next" == web_search_request=false ]]; then
+      normalized_args+=( --disable web_search_request )
+      i=$((i + 2))
+      continue
+    fi
+  fi
+
+  normalized_args+=( "$arg" )
+  i=$((i + 1))
+done
+CODEX_ARGS=( "${normalized_args[@]}" )
+
+# ----------------------------
+# Optional: resume initial prompt stub (empty by default)
+#
+# `codex resume [SESSION_ID] [PROMPT]` supports a positional PROMPT that is
+# applied immediately when resuming a session. We keep a hook to inject a default
+# prompt for resume workflows; by default it is empty (no injection).
+# Special value:
+# - CODEX_CONTAINER_SANDBOX_RESUME_FIRST_PROMPT='@preflight' injects instructions
+#   to run the wrapper-created preflight script at `{workspace}/tmp/...`.
+# ----------------------------
+if [[ -n "${CODEX_CONTAINER_SANDBOX_RESUME_FIRST_PROMPT:-}" ]]; then
+  if [[ "${#CODEX_ARGS[@]}" -ge 1 ]] && [[ "${CODEX_ARGS[0]}" == "resume" || "${CODEX_ARGS[0]}" == "r" ]]; then
+    # Count resume positional args (SESSION_ID, PROMPT) after stripping known options.
+    # Only inject if fewer than 2 positionals are present (i.e., no user prompt yet).
+    resume_positionals=()
+    i=1
+    while [[ "$i" -lt "${#CODEX_ARGS[@]}" ]]; do
+      arg="${CODEX_ARGS[$i]}"
+      if [[ "$arg" == "--" ]]; then
+        i=$((i + 1))
+        while [[ "$i" -lt "${#CODEX_ARGS[@]}" ]]; do
+          resume_positionals+=( "${CODEX_ARGS[$i]}" )
+          i=$((i + 1))
+        done
+        break
+      fi
+
+      case "$arg" in
+        -c|--config|--enable|--disable|-i|--image|-m|--model|--local-provider|-p|--profile|-s|--sandbox|-a|--ask-for-approval|-C|--cd|--add-dir)
+          i=$((i + 2))
+          ;;
+        --last|--all|--oss|--full-auto|--dangerously-bypass-approvals-and-sandbox|--search|-h|--help|-V|--version)
+          i=$((i + 1))
+          ;;
+        -*)
+          i=$((i + 1))
+          ;;
+        *)
+          resume_positionals+=( "$arg" )
+          i=$((i + 1))
+          ;;
+      esac
+    done
+
+    if [[ "${#resume_positionals[@]}" -lt 2 ]]; then
+      prompt_to_inject="$CODEX_CONTAINER_SANDBOX_RESUME_FIRST_PROMPT"
+      if [[ "$prompt_to_inject" == "@preflight" ]]; then
+        preflight_rel="${CODEX_CONTAINER_SANDBOX_PREFLIGHT_SCRIPT_REL:-tmp/sandbox-agent/preflight.sh}"
+        prompt_to_inject=$(
+          cat <<EOF
+Before doing anything else, run the container environment preflight and paste the output:
+
+- Run: \`bash ./$preflight_rel | tee ./tmp/sandbox-agent/preflight.latest.txt\`
+
+Then summarize (very briefly):
+- Which tools are missing (if any)
+- Whether \`\$CODEX_HOME/skills\` and \`\$CODEX_HOME/prompts\` are mounted
+- Confirm web search is enabled for this session (wrapper starts codex with \`--search\`)
+
+Then validate web search end-to-end:
+- Use the **built-in** \`web_search\` tool (not curl/python scraping) to search: "OpenAI Codex CLI documentation URL"
+- If it returns results, pick the official documentation URL and continue.
+- If it does not, report that web search appears unavailable/broken.
+
+When using Python in this environment, always run via \`uv run\` (do not call \`python\` directly).
+
+After that, proceed with the user request.
+EOF
+        )
+      fi
+      CODEX_ARGS+=( "$prompt_to_inject" )
+    fi
+  fi
+fi
+fi
+
+# ----------------------------
+# Compute workspace mount
+# ----------------------------
+WORKSPACE_HOST="$(pwd -P)"
+WORKSPACE_ROOT_HOST="$WORKSPACE_HOST"
+if git -C "$WORKSPACE_HOST" rev-parse --show-toplevel >/dev/null 2>&1; then
+  WORKSPACE_ROOT_HOST="$(git -C "$WORKSPACE_HOST" rev-parse --show-toplevel)"
+fi
+WORKSPACE_HOST="$(readlink -f "$WORKSPACE_HOST")"
+WORKSPACE_ROOT_HOST="$(readlink -f "$WORKSPACE_ROOT_HOST")"
+WORKSPACE_BASE="$(basename "$WORKSPACE_ROOT_HOST")"
+CONTAINER_HOME="$CODEX_CONTAINER_SANDBOX_CONTAINER_HOME"
+WORKSPACE_ROOT_CONT="$CONTAINER_HOME/$WORKSPACE_BASE"
+
+# ----------------------------
+# Ensure workspace tmp structure exists (host-side)
+#
+# Agents should always write temporary artifacts to `{workspace}/tmp/...`.
+# Creating these ahead of time reduces friction and keeps the structure consistent.
+#
+# We also try to ignore `tmp/` via `.git/info/exclude` (repo-local, uncommitted),
+# so these artifacts don't show up in `git status`.
+# ----------------------------
+mkdir -p \
+  "$WORKSPACE_ROOT_HOST/tmp/sandbox-agent" \
+  "$WORKSPACE_ROOT_HOST/tmp/fetched/web/raw" \
+  "$WORKSPACE_ROOT_HOST/tmp/fetched/web/markdown" \
+  "$WORKSPACE_ROOT_HOST/tmp/fetched/pdf/raw" \
+  "$WORKSPACE_ROOT_HOST/tmp/fetched/pdf/pages" \
+  "$WORKSPACE_ROOT_HOST/tmp/fetched/pdf/text" \
+  "$WORKSPACE_ROOT_HOST/tmp/fetched/images/raw" \
+  "$WORKSPACE_ROOT_HOST/tmp/fetched/images/derived" \
+  "$WORKSPACE_ROOT_HOST/tmp/fetched/other/raw" \
+  "$WORKSPACE_ROOT_HOST/tmp/fetched/other/derived"
+
+# Ensure the preflight script exists under workspace tmp (best-effort).
+PREFLIGHT_SCRIPT_HOST="$WORKSPACE_ROOT_HOST/${CODEX_CONTAINER_SANDBOX_PREFLIGHT_SCRIPT_REL:-tmp/sandbox-agent/preflight.sh}"
+PREFLIGHT_DIR_HOST="$(dirname "$PREFLIGHT_SCRIPT_HOST")"
+mkdir -p "$PREFLIGHT_DIR_HOST" >/dev/null 2>&1 || true
+if [[ ! -f "$PREFLIGHT_SCRIPT_HOST" ]]; then
+  if [[ -d "$PREFLIGHT_DIR_HOST" ]] && [[ -w "$PREFLIGHT_DIR_HOST" ]]; then
+    tmp_script="$(mktemp /tmp/sandbox-agent-preflight.XXXXXX 2>/dev/null || true)"
+    if [[ -n "${tmp_script:-}" ]]; then
+      cat >"$tmp_script" <<'EOF'
+#!/usr/bin/env bash
+# sandbox-agent preflight (runs inside container)
+set -u
+
+echo "[preflight] whoami=$(whoami 2>/dev/null || true)"
+echo "[preflight] id=$(id 2>/dev/null || true)"
+echo "[preflight] HOME=${HOME:-}"
+echo "[preflight] CODEX_HOME=${CODEX_HOME:-}"
+echo "[preflight] PWD=$(pwd -P 2>/dev/null || pwd)"
+echo "[preflight] PATH=${PATH:-}"
+
+echo "[preflight] --- mounts ---"
+if [[ -n "${CODEX_HOME:-}" ]]; then
+  if [[ -d "$CODEX_HOME/skills" ]]; then
+    echo "[preflight] skills mount: present ($CODEX_HOME/skills)"
+  else
+    echo "[preflight] skills mount: MISSING ($CODEX_HOME/skills)"
+  fi
+  if [[ -d "$CODEX_HOME/prompts" ]]; then
+    echo "[preflight] prompts mount: present ($CODEX_HOME/prompts)"
+  else
+    echo "[preflight] prompts mount: MISSING ($CODEX_HOME/prompts)"
+  fi
+else
+  echo "[preflight] CODEX_HOME is unset"
+fi
+
+check_tools() {
+  local missing=0
+  for tool in "$@"; do
+    if command -v "$tool" >/dev/null 2>&1; then
+      echo "[preflight] OK   $tool -> $(command -v "$tool")"
+    else
+      echo "[preflight] MISS $tool"
+      missing=1
+    fi
+  done
+  return "$missing"
+}
+
+echo "[preflight] --- tool resolution (current shell) ---"
+check_tools codex python3 uv rg curl pandoc mq typst playwright chromium read-pdf markitdown ttok jq yq || true
+
+echo "[preflight] --- tool resolution (login shell: bash -lc) ---"
+if command -v bash >/dev/null 2>&1; then
+  bash -lc 'for tool in ttok jq yq markitdown; do if command -v "$tool" >/dev/null 2>&1; then echo "[preflight] OK   $tool -> $(command -v "$tool")"; else echo "[preflight] MISS $tool"; fi; done' || true
+else
+  echo "[preflight] bash missing; cannot test bash -lc PATH behavior"
+fi
+
+echo "[preflight] --- codex web search flag ---"
+if command -v codex >/dev/null 2>&1; then
+  codex --help 2>/dev/null | sed -n '85,110p' | sed 's/^/[preflight] /' || true
+fi
+EOF
+      chmod +x "$tmp_script" >/dev/null 2>&1 || true
+      if ! mv -f "$tmp_script" "$PREFLIGHT_SCRIPT_HOST" >/dev/null 2>&1; then
+        rm -f "$tmp_script" >/dev/null 2>&1 || true
+      fi
+    fi
+  fi
+fi
+
+if git -C "$WORKSPACE_ROOT_HOST" rev-parse --git-dir >/dev/null 2>&1; then
+  git_dir="$(git -C "$WORKSPACE_ROOT_HOST" rev-parse --git-dir)"
+  if [[ "$git_dir" != /* ]]; then
+    git_dir="$WORKSPACE_ROOT_HOST/$git_dir"
+  fi
+
+  exclude_file="$git_dir/info/exclude"
+  if [[ -w "$exclude_file" ]]; then
+    if ! grep -qxF "tmp/" "$exclude_file" 2>/dev/null; then
+      {
+        echo ""
+        echo "# sandbox-agent: ignore workspace tmp artifacts"
+        echo "tmp/"
+      } >>"$exclude_file"
+    fi
+  fi
+fi
+
+if [[ "$WORKSPACE_HOST" == "$WORKSPACE_ROOT_HOST" ]]; then
+  WORKSPACE_CONT="$WORKSPACE_ROOT_CONT"
+elif [[ "$WORKSPACE_HOST" == "$WORKSPACE_ROOT_HOST/"* ]]; then
+  rel="${WORKSPACE_HOST#$WORKSPACE_ROOT_HOST/}"
+  WORKSPACE_CONT="$WORKSPACE_ROOT_CONT/$rel"
+else
+  WORKSPACE_CONT="$WORKSPACE_ROOT_CONT"
+fi
+
+# ----------------------------
+# Prepare host state dir (0700)
+# ----------------------------
+install -d -m 0700 "$CODEX_CONTAINER_SANDBOX_STATE_DIR"
+STATE_CONT="$CONTAINER_HOME/.codex"
+
+# ----------------------------
+# Optional: sync git identity into container global gitconfig
+#
+# This avoids "Author identity unknown" when making commits inside the container.
+# We write the config into the host state dir so it persists across runs, then
+# point GIT_CONFIG_GLOBAL at it in-container.
+# ----------------------------
+GIT_CONFIG_GLOBAL_HOST="$CODEX_CONTAINER_SANDBOX_STATE_DIR/gitconfig"
+GIT_NAME=""
+GIT_EMAIL=""
+
+if [[ "${CODEX_CONTAINER_SANDBOX_DISABLE_GIT_IDENTITY_SYNC:-0}" -ne 1 ]]; then
+  if [[ -n "${CODEX_CONTAINER_SANDBOX_GIT_NAME:-}" ]]; then
+    GIT_NAME="$CODEX_CONTAINER_SANDBOX_GIT_NAME"
+  else
+    GIT_NAME="$(git config --get user.name 2>/dev/null || true)"
+  fi
+
+  if [[ -n "${CODEX_CONTAINER_SANDBOX_GIT_EMAIL:-}" ]]; then
+    GIT_EMAIL="$CODEX_CONTAINER_SANDBOX_GIT_EMAIL"
+  else
+    GIT_EMAIL="$(git config --get user.email 2>/dev/null || true)"
+  fi
+
+  if command -v git >/dev/null 2>&1; then
+    if [[ -n "${GIT_NAME:-}" ]]; then
+      git config --file "$GIT_CONFIG_GLOBAL_HOST" user.name "$GIT_NAME" >/dev/null 2>&1 || true
+    fi
+    if [[ -n "${GIT_EMAIL:-}" ]]; then
+      git config --file "$GIT_CONFIG_GLOBAL_HOST" user.email "$GIT_EMAIL" >/dev/null 2>&1 || true
+    fi
+  fi
+
+  if [[ -z "${GIT_NAME:-}" || -z "${GIT_EMAIL:-}" ]]; then
+    echo "[sandbox-agent] WARN: git identity not fully set (user.name/user.email); commits may fail." >&2
+    echo "[sandbox-agent]       Fix on host: git config --global user.name \"...\"; git config --global user.email \"...\"" >&2
+    echo "[sandbox-agent]       Or override: CODEX_CONTAINER_SANDBOX_GIT_NAME / CODEX_CONTAINER_SANDBOX_GIT_EMAIL" >&2
+  fi
+fi
+
+# ----------------------------
+# Optional: reuse host Codex auth.json
+# ----------------------------
+AUTH_HOST=""
+if [[ "${CODEX_CONTAINER_SANDBOX_DISABLE_AUTH_MOUNT:-0}" -ne 1 ]]; then
+  if [[ -n "${CODEX_CONTAINER_SANDBOX_AUTH_FILE:-}" ]]; then
+    AUTH_HOST="$CODEX_CONTAINER_SANDBOX_AUTH_FILE"
+  elif [[ -r "$HOME/.codex/auth.json" ]]; then
+    AUTH_HOST="$HOME/.codex/auth.json"
+  fi
+fi
+
+if [[ -n "${AUTH_HOST:-}" ]]; then
+  AUTH_HOST="$(readlink -f "$AUTH_HOST" 2>/dev/null || echo "$AUTH_HOST")"
+  if [[ ! -r "$AUTH_HOST" ]]; then
+    echo "[sandbox-agent] auth file not readable; skipping mount: $AUTH_HOST" >&2
+    AUTH_HOST=""
+  fi
+fi
+
+PROMPTS_HOST=""
+if [[ "${CODEX_CONTAINER_SANDBOX_DISABLE_PROMPTS_MOUNT:-0}" -ne 1 ]]; then
+  if [[ -n "${CODEX_CONTAINER_SANDBOX_PROMPTS_DIR:-}" ]]; then
+    PROMPTS_HOST="$CODEX_CONTAINER_SANDBOX_PROMPTS_DIR"
+  elif [[ -d "$HOME/.codex/prompts" ]]; then
+    PROMPTS_HOST="$HOME/.codex/prompts"
+  fi
+fi
+if [[ -n "${PROMPTS_HOST:-}" ]]; then
+  PROMPTS_HOST="$(readlink -f "$PROMPTS_HOST" 2>/dev/null || echo "$PROMPTS_HOST")"
+  if [[ ! -d "$PROMPTS_HOST" ]] || [[ ! -r "$PROMPTS_HOST" ]]; then
+    echo "[sandbox-agent] prompts dir not readable; skipping mount: $PROMPTS_HOST" >&2
+    PROMPTS_HOST=""
+  fi
+fi
+
+SKILLS_HOST=""
+if [[ "${CODEX_CONTAINER_SANDBOX_DISABLE_SKILLS_MOUNT:-0}" -ne 1 ]]; then
+  if [[ -n "${CODEX_CONTAINER_SANDBOX_SKILLS_DIR:-}" ]]; then
+    SKILLS_HOST="$CODEX_CONTAINER_SANDBOX_SKILLS_DIR"
+  elif [[ -d "$HOME/.codex/skills" ]]; then
+    SKILLS_HOST="$HOME/.codex/skills"
+  fi
+fi
+if [[ -n "${SKILLS_HOST:-}" ]]; then
+  SKILLS_HOST="$(readlink -f "$SKILLS_HOST" 2>/dev/null || echo "$SKILLS_HOST")"
+  if [[ ! -d "$SKILLS_HOST" ]] || [[ ! -r "$SKILLS_HOST" ]]; then
+    echo "[sandbox-agent] skills dir not readable; skipping mount: $SKILLS_HOST" >&2
+    SKILLS_HOST=""
+  fi
+fi
+
+# ----------------------------
+# Helper: add a mount only once (avoids duplicate -v flags)
+# ----------------------------
+add_ro_mount_unique() {
+  local p="${1:?missing path}"
+  local resolved_p
+  resolved_p="$(readlink -f "$p" 2>/dev/null || echo "$p")"
+  local existing resolved_existing
+  for existing in "${SANDBOX_RO_MOUNTS[@]}"; do
+    resolved_existing="$(readlink -f "$existing" 2>/dev/null || echo "$existing")"
+    if [[ "$resolved_existing" == "$resolved_p" ]]; then
+      return 0
+    fi
+  done
+  SANDBOX_RO_MOUNTS+=("$p")
+}
+
+# Host ~/.local/bin (optional). Useful for host-installed helper CLIs like read-pdf.
+#
+# IMPORTANT: Prefer mounting specific executables rather than the entire
+# ~/.local/bin directory to avoid unintentionally exposing unrelated host tools.
+if [[ "${CODEX_CONTAINER_SANDBOX_DISABLE_LOCAL_BIN_MOUNT:-0}" -ne 1 ]]; then
+  if [[ -d "$HOME/.local/bin" ]]; then
+    for tool in read-pdf ttok; do
+      if command -v "$tool" >/dev/null 2>&1; then
+        tool_path="$(command -v "$tool" 2>/dev/null || true)"
+        if [[ "$tool_path" == "$HOME/.local/bin/$tool" ]]; then
+          add_ro_mount_unique "$HOME/.local/bin/$tool"
+        fi
+      fi
+    done
+  fi
+fi
+
+# Host opencode binary (optional). opencode is often installed to ~/.opencode/bin/opencode.
+if [[ -x "$HOME/.opencode/bin/opencode" ]]; then
+  add_ro_mount_unique "$HOME/.opencode/bin/opencode"
+fi
+
+# Host uv tools (optional). Needed when host CLIs in ~/.local/bin are symlinks to
+# ~/.local/share/uv/tools/... (common for uv tool installs like ttok/markitdown).
+UV_TOOLS_HOST=""
+UV_PYTHON_HOST=""
+if [[ "${CODEX_CONTAINER_SANDBOX_DISABLE_UV_TOOLS_MOUNT:-0}" -ne 1 ]]; then
+  uv_tools_default="$HOME/.local/share/uv/tools"
+  if [[ -d "$uv_tools_default" ]]; then
+    # The image ships with markitdown; only auto-mount uv tools when we need a
+    # host-installed uv tool (e.g., ttok).
+    for tool in ttok; do
+      if command -v "$tool" >/dev/null 2>&1; then
+        tool_path="$(command -v "$tool" 2>/dev/null || true)"
+        tool_target="$(readlink -f "$tool_path" 2>/dev/null || echo "$tool_path")"
+        if [[ "$tool_target" == "$uv_tools_default/"* ]]; then
+          UV_TOOLS_HOST="$uv_tools_default"
+          if [[ "${CODEX_CONTAINER_SANDBOX_DISABLE_UV_PYTHON_MOUNT:-0}" -ne 1 ]] && [[ -d "$HOME/.local/share/uv/python" ]]; then
+            UV_PYTHON_HOST="$HOME/.local/share/uv/python"
+          fi
+          break
+        fi
+      fi
+    done
+  fi
+fi
+
+# ----------------------------
+# Helper: map a host path -> container path
+#  - if under $HOME, preserve relative path under container home
+#  - else, mount to the same absolute path
+# ----------------------------
+map_path() {
+  local host_path="$1"
+  host_path="$(readlink -f "$host_path")"
+  if [[ "$host_path" == "$HOME/"* ]]; then
+    local rel="${host_path#$HOME/}"
+    echo "$CONTAINER_HOME/$rel"
+  else
+    echo "$host_path"
+  fi
+}
+
+# ----------------------------
+# Build podman args
+# ----------------------------
+PODMAN_ARGS=()
+
+# OCI runtime.
+# Prefer the most modern runtime that is actually available. Historically, some
+# WSL setups had flaky `crun` behavior; those cases should set an explicit override.
+if [[ -z "${CODEX_CONTAINER_SANDBOX_PODMAN_RUNTIME:-}" ]]; then
+  if is_wsl; then
+    if command -v crun >/dev/null 2>&1; then
+      CODEX_CONTAINER_SANDBOX_PODMAN_RUNTIME="crun"
+    elif command -v runc >/dev/null 2>&1; then
+      CODEX_CONTAINER_SANDBOX_PODMAN_RUNTIME="runc"
+    fi
+  fi
+fi
+
+if [[ -n "${CODEX_CONTAINER_SANDBOX_PODMAN_RUNTIME:-}" ]]; then
+  if ! command -v "$CODEX_CONTAINER_SANDBOX_PODMAN_RUNTIME" >/dev/null 2>&1; then
+    echo "[sandbox-agent] WARN: requested OCI runtime '$CODEX_CONTAINER_SANDBOX_PODMAN_RUNTIME' not found on PATH; letting podman choose default." >&2
+    CODEX_CONTAINER_SANDBOX_PODMAN_RUNTIME=""
+  fi
+fi
+if [[ -n "${CODEX_CONTAINER_SANDBOX_PODMAN_RUNTIME:-}" ]]; then
+  PODMAN_ARGS+=( --runtime "$CODEX_CONTAINER_SANDBOX_PODMAN_RUNTIME" )
+fi
+
+# cgroups-v2 is the modern default. On WSL, you typically only get it once
+# systemd + unified cgroup hierarchy are enabled.
+if is_wsl; then
+  cgroup_fs_type="$(stat -fc %T /sys/fs/cgroup 2>/dev/null || true)"
+  if [[ "${cgroup_fs_type:-}" != "cgroup2fs" ]]; then
+    echo "[sandbox-agent] WARN: host appears to be using cgroups-v1/hybrid (type=${cgroup_fs_type:-unknown}); Podman v5+ prefers cgroups-v2." >&2
+    echo "[sandbox-agent] WARN: Enable systemd + cgroups-v2 in WSL for best compatibility (see os_scripts/windows/wsl_setup_ubuntu_2404.ps1 -EnableSystemd -EnableCgroupV2 -ShutdownAfter)." >&2
+  fi
+fi
+
+# tty / interactive only if stdout is a tty
+if [[ -t 0 && -t 1 ]]; then
+  PODMAN_ARGS+=( -it )
+else
+  PODMAN_ARGS+=( -i )
+fi
+
+PODMAN_ARGS+=( --hostname "$CODEX_CONTAINER_SANDBOX_HOSTNAME" )
+
+if [[ "$CODEX_CONTAINER_SANDBOX_PERSIST" -eq 0 ]]; then
+  PODMAN_ARGS+=( --rm )
+fi
+
+# Rootless Podman default user mapping makes host-owned bind mounts appear as
+# owned by container uid 0. Use keep-id so the invoking host UID/GID map to the
+# same IDs in-container, then run as that user so the mounted workspace remains
+# writable without creating root-owned files on the host.
+PODMAN_ARGS+=( --userns=keep-id )
+PODMAN_ARGS+=( --user "$(id -u):$(id -g)" )
+
+# Keep it predictable
+PODMAN_ARGS+=( --env "HOME=$CONTAINER_HOME" --env "USER=${USER:-codex}" )
+PODMAN_ARGS+=( --env "CODEX_HOME=$STATE_CONT" )
+PODMAN_ARGS+=( --workdir "$WORKSPACE_CONT" )
+
+# Use a persistent git global config under CODEX_HOME.
+# (git reads this env var as the preferred global config path)
+PODMAN_ARGS+=( --env "GIT_CONFIG_GLOBAL=$STATE_CONT/gitconfig" )
+
+# Also pass explicit author/committer identity if we have it.
+if [[ -n "${GIT_NAME:-}" ]]; then
+  PODMAN_ARGS+=( --env "GIT_AUTHOR_NAME=$GIT_NAME" --env "GIT_COMMITTER_NAME=$GIT_NAME" )
+fi
+if [[ -n "${GIT_EMAIL:-}" ]]; then
+  PODMAN_ARGS+=( --env "GIT_AUTHOR_EMAIL=$GIT_EMAIL" --env "GIT_COMMITTER_EMAIL=$GIT_EMAIL" )
+fi
+
+# Minimal PATH with typical user bins first.
+# Include $HOME/.opencode/bin so a host-mounted opencode binary is runnable.
+container_path="$CONTAINER_HOME/.local/bin:$CONTAINER_HOME/.opencode/bin:$CONTAINER_HOME/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+PODMAN_ARGS+=( --env "PATH=$container_path" )
+
+# DNS override (optional; default on).
+if [[ "${CODEX_CONTAINER_SANDBOX_DISABLE_DNS_OVERRIDE:-0}" -ne 1 ]]; then
+  # Avoid Podman/Netavark DNS forwarders (often a 169.254.x.x hop) by
+  # bind-mounting a deterministic resolv.conf into the container.
+  #
+  # This also ensures short-lived, non-interactive runs don't inherit flaky
+  # WSL/Podman DNS forwarders.
+  RESOLV_CONF_HOST="$CODEX_CONTAINER_SANDBOX_STATE_DIR/resolv.conf"
+  tmp_resolv="${RESOLV_CONF_HOST}.tmp.$$"
+  {
+    echo "# Generated by sandbox-agent"
+    for dns in "${DNS_SERVERS[@]}"; do
+      echo "nameserver $dns"
+    done
+  } >"$tmp_resolv"
+  chmod 0644 "$tmp_resolv" >/dev/null 2>&1 || true
+  mv -f "$tmp_resolv" "$RESOLV_CONF_HOST" >/dev/null 2>&1 || mv -f "$tmp_resolv" "$RESOLV_CONF_HOST"
+
+  PODMAN_ARGS+=( -v "$RESOLV_CONF_HOST:/etc/resolv.conf:ro" )
+fi
+
+# Ensure `bash -c ...` and `bash -lc ...` subprocesses see the same PATH.
+# Many agent tool runners invoke commands via non-interactive shells and some use
+# `bash -lc`, which resets PATH via /etc/profile; BASH_ENV lets us restore it.
+#
+# Note: In some sandboxed harnesses, writing to $XDG_STATE_HOME may be blocked;
+# treat BASH_ENV creation as best-effort (do not fail the wrapper).
+BASH_ENV_HOST="$CODEX_CONTAINER_SANDBOX_STATE_DIR/bash_env.sh"
+if [[ ! -f "$BASH_ENV_HOST" ]]; then
+  if { umask 077 && cat >"$BASH_ENV_HOST" <<EOF
+export PATH=$(printf '%q' "$container_path")
+EOF
+  }; then
+    chmod 0600 "$BASH_ENV_HOST" >/dev/null 2>&1 || true
+  else
+    echo "[sandbox-agent] WARN: could not write $BASH_ENV_HOST; PATH inside bash -lc may be incomplete." >&2
+  fi
+fi
+PODMAN_ARGS+=( --env "BASH_ENV=$STATE_CONT/bash_env.sh" )
+
+# Put common tool caches inside the mounted state dir by default.
+PODMAN_ARGS+=( --env "XDG_CACHE_HOME=$STATE_CONT/cache" )
+
+# Workspace RW (root or current dir)
+PODMAN_ARGS+=( -v "$WORKSPACE_ROOT_HOST:$WORKSPACE_ROOT_CONT:rw" )
+
+# Make the repo-root AGENTS.md read-only inside the container (overlay mount).
+# This prevents in-container agents from modifying durable repo heuristics/memory
+# while keeping the rest of the workspace writable.
+#
+# Note: Some repos may not have AGENTS.md; only apply when present.
+AGENTS_HOST="$WORKSPACE_ROOT_HOST/AGENTS.md"
+if [[ -f "$AGENTS_HOST" ]]; then
+  PODMAN_ARGS+=( -v "$(readlink -f "$AGENTS_HOST"):$WORKSPACE_ROOT_CONT/AGENTS.md:ro" )
+fi
+
+# Codex state dir RW
+PODMAN_ARGS+=( -v "$CODEX_CONTAINER_SANDBOX_STATE_DIR:$STATE_CONT:rw" )
+
+# Host auth.json (optional). Mount after CODEX_HOME dir so the file overlays.
+if [[ -n "${AUTH_HOST:-}" ]]; then
+  case "${CODEX_CONTAINER_SANDBOX_AUTH_MOUNT_MODE:-ro}" in
+    ro|rw) ;;
+    *)
+      echo "[sandbox-agent] invalid CODEX_CONTAINER_SANDBOX_AUTH_MOUNT_MODE=${CODEX_CONTAINER_SANDBOX_AUTH_MOUNT_MODE}; use ro or rw" >&2
+      exit 2
+      ;;
+  esac
+  PODMAN_ARGS+=( -v "$AUTH_HOST:$STATE_CONT/auth.json:${CODEX_CONTAINER_SANDBOX_AUTH_MOUNT_MODE}" )
+fi
+
+# Host prompts/skills (optional). Mount after CODEX_HOME dir so they overlay and remain RO.
+if [[ -n "${PROMPTS_HOST:-}" ]]; then
+  PODMAN_ARGS+=( -v "$PROMPTS_HOST:$STATE_CONT/prompts:ro" )
+fi
+if [[ -n "${SKILLS_HOST:-}" ]]; then
+  PODMAN_ARGS+=( -v "$SKILLS_HOST:$STATE_CONT/skills:ro" )
+fi
+
+# Host uv tools and Homebrew prefix (optional). These are mounted to their
+# original absolute paths to keep host-installed symlinks and ELF RPATHs working.
+if [[ -n "${UV_TOOLS_HOST:-}" ]]; then
+  PODMAN_ARGS+=( -v "$UV_TOOLS_HOST:$UV_TOOLS_HOST:ro" )
+fi
+if [[ -n "${UV_PYTHON_HOST:-}" ]]; then
+  PODMAN_ARGS+=( -v "$UV_PYTHON_HOST:$UV_PYTHON_HOST:ro" )
+fi
+# Extra mounts from config/flags
+for p in "${SANDBOX_RO_MOUNTS[@]}"; do
+  [[ -e "$p" ]] || { echo "[sandbox-agent] RO mount missing: $p" >&2; exit 2; }
+  PODMAN_ARGS+=( -v "$(readlink -f "$p"):$(map_path "$p"):ro" )
+done
+
+for p in "${SANDBOX_RW_MOUNTS[@]}"; do
+  [[ -e "$p" ]] || { echo "[sandbox-agent] RW mount missing: $p" >&2; exit 2; }
+  PODMAN_ARGS+=( -v "$(readlink -f "$p"):$(map_path "$p"):rw" )
+done
+
+# Env passthrough
+for var in "${SANDBOX_ENV_PASSTHROUGH[@]}"; do
+  if [[ -n "${!var-}" ]]; then
+    PODMAN_ARGS+=( --env "$var" )
+  fi
+done
+
+# ----------------------------
+# Assemble container command
+# ----------------------------
+case "${TARGET_TOOL:-codex}" in
+  bash)
+    CONTAINER_CMD=( bash )
+    ;;
+  zsh)
+    if [[ "${#TARGET_ARGS[@]}" -eq 0 ]]; then
+      CONTAINER_CMD=( zsh -l )
+    else
+      CONTAINER_CMD=( zsh "${TARGET_ARGS[@]}" )
+    fi
+    ;;
+  copilot)
+    CONTAINER_CMD=( copilot "${TARGET_ARGS[@]}" )
+    ;;
+  opencode)
+    CONTAINER_CMD=( opencode "${TARGET_ARGS[@]}" )
+    ;;
+  codex)
+    CONTAINER_CMD=( codex )
+    # Always enable web search tool availability for the agent.
+    #
+    # `--search` is the documented flag. `--enable web_search_request` is a
+    # belt-and-suspenders toggle that forces the underlying feature on as well.
+    CONTAINER_CMD+=( --search --enable web_search_request )
+    exec_idx=-1
+    for i in "${!CODEX_ARGS[@]}"; do
+      if [[ "${CODEX_ARGS[$i]}" == "exec" || "${CODEX_ARGS[$i]}" == "e" ]]; then
+        exec_idx="$i"
+        break
+      fi
+    done
+
+    if [[ "$exec_idx" -ge 0 ]]; then
+      before_exec=( "${CODEX_ARGS[@]:0:$((exec_idx+1))}" )
+      after_exec=( "${CODEX_ARGS[@]:$((exec_idx+1))}" )
+
+      # By default, we strip global sandbox/approval flags from before_exec and
+      # re-inject them after `exec` (where `codex exec` actually reads them).
+      #
+      # However, for debugging scenarios where the user explicitly disables our
+      # yolo injection (CODEX_CONTAINER_SANDBOX_DISABLE_YOLO_INJECTION=1), we
+      # should preserve global flags (notably `-a/--ask-for-approval`) since they
+      # may only be accepted as top-level flags.
+      if [[ "${CODEX_CONTAINER_SANDBOX_DISABLE_YOLO_INJECTION:-0}" -eq 1 ]]; then
+        before_exec_clean=( "${before_exec[@]}" )
+      else
+        before_exec_clean=()
+        i=0
+        while [[ "$i" -lt "${#before_exec[@]}" ]]; do
+          case "${before_exec[$i]}" in
+            --sandbox|-s|--ask-for-approval|-a)
+              i=$((i+2))
+              ;;
+            --yolo|--dangerously-bypass-approvals-and-sandbox|--full-auto)
+              i=$((i+1))
+              ;;
+            *)
+              before_exec_clean+=( "${before_exec[$i]}" )
+              i=$((i+1))
+              ;;
+          esac
+        done
+      fi
+
+      injected=()
+      if [[ "${CODEX_CONTAINER_SANDBOX_DISABLE_YOLO_INJECTION:-0}" -ne 1 ]]; then
+        has_bypass=0
+        has_sandbox=0
+        for arg in "${after_exec[@]}"; do
+          if [[ "$arg" == "--dangerously-bypass-approvals-and-sandbox" || "$arg" == "--yolo" ]]; then
+            has_bypass=1
+          elif [[ "$arg" == "--sandbox" || "$arg" == "-s" ]]; then
+            has_sandbox=1
+          fi
+        done
+
+        if [[ "$has_bypass" -eq 0 ]]; then
+          injected+=( --dangerously-bypass-approvals-and-sandbox )
+        fi
+        if [[ "$has_sandbox" -eq 0 ]]; then
+          injected+=( --sandbox danger-full-access )
+        fi
+      fi
+
+      CONTAINER_CMD+=( "${before_exec_clean[@]}" "${injected[@]}" "${after_exec[@]}" )
+    else
+      # No exec subcommand found; inject at the top level.
+      if [[ "${CODEX_CONTAINER_SANDBOX_DISABLE_YOLO_INJECTION:-0}" -ne 1 ]]; then
+        has_bypass=0
+        has_sandbox=0
+        for arg in "${CODEX_ARGS[@]}"; do
+          if [[ "$arg" == "--dangerously-bypass-approvals-and-sandbox" || "$arg" == "--yolo" ]]; then
+            has_bypass=1
+          elif [[ "$arg" == "--sandbox" || "$arg" == "-s" ]]; then
+            has_sandbox=1
+          fi
+        done
+
+        if [[ "$has_bypass" -eq 0 ]]; then
+          CONTAINER_CMD+=( --dangerously-bypass-approvals-and-sandbox )
+        fi
+        if [[ "$has_sandbox" -eq 0 ]]; then
+          CONTAINER_CMD+=( --sandbox danger-full-access )
+        fi
+      fi
+      CONTAINER_CMD+=( "${CODEX_ARGS[@]}" )
+    fi
+    ;;
+  *)
+    echo "[sandbox-agent] unsupported tool: ${TARGET_TOOL}" >&2
+    echo "[sandbox-agent] allowed tools: codex, copilot, opencode, zsh, bash" >&2
+    exit 2
+    ;;
+esac
+
+# ----------------------------
+# Run
+# ----------------------------
+if ! "$CODEX_CONTAINER_SANDBOX_PODMAN" image exists "$CODEX_CONTAINER_SANDBOX_IMAGE" >/dev/null 2>&1; then
+  if [[ "$CODEX_CONTAINER_SANDBOX_IMAGE" == localhost/* ]]; then
+    wrapper_path="$(readlink -f "${BASH_SOURCE[0]}")"
+    wrapper_dir="$(cd "$(dirname "$wrapper_path")" && pwd -P)"
+    repo_dir="$wrapper_dir"
+
+    echo "[sandbox-agent] ERROR: image not found locally: $CODEX_CONTAINER_SANDBOX_IMAGE" >&2
+    echo "[sandbox-agent] This looks like a local-only tag (localhost/*). Podman will try to pull it from a registry at localhost and fail unless you run one." >&2
+    echo >&2
+    if [[ -f "$repo_dir/Containerfile" ]]; then
+      echo "[sandbox-agent] Build it once with:" >&2
+      echo "[sandbox-agent]   cd \"$repo_dir\" && make image" >&2
+    else
+      echo "[sandbox-agent] Build it once with the repo's Containerfile (see README.md), or pass --image <remote-image>." >&2
+    fi
+    exit 2
+  fi
+fi
+
+FULL_CMD=( "$CODEX_CONTAINER_SANDBOX_PODMAN" run "${PODMAN_ARGS[@]}" "$CODEX_CONTAINER_SANDBOX_IMAGE" "${CONTAINER_CMD[@]}" )
+
+if [[ "$CODEX_CONTAINER_SANDBOX_DEBUG" -eq 1 || "$CODEX_CONTAINER_SANDBOX_PRINT_CODEX_CMD" -eq 1 ]]; then
+  echo "[sandbox-agent] container cmd:" >&2
+  printf '  %q' "${CONTAINER_CMD[@]}" >&2
+  echo >&2
+fi
+
+if [[ "$CODEX_CONTAINER_SANDBOX_DEBUG" -eq 1 ]]; then
+  echo "[sandbox-agent] podman cmd:" >&2
+  printf '  %q' "${FULL_CMD[@]}" >&2
+  echo >&2
+fi
+
+exec "${FULL_CMD[@]}"
