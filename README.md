@@ -112,7 +112,13 @@ CODEX_CONTAINER_SANDBOX_RW_MOUNTS=(
 
 ## Usage
 
-### Full network (default)
+### Default: zsh shell in container
+
+```bash
+sandbox-agent
+```
+
+### Codex (full network)
 
 ```bash
 sandbox-agent codex exec "Summarize the repo"
