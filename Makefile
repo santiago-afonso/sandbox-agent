@@ -25,7 +25,7 @@ PREFIX ?= $(HOME)/.local
 BINDIR ?= $(PREFIX)/bin
 
 help:
-		@echo "sandbox-agent"
+	@echo "sandbox-agent"
 	@echo
 	@echo "Targets:"
 	@echo "  image          Build the container image (IMAGE=$(IMAGE))"
@@ -95,13 +95,13 @@ image:
 
 install: image install-wrapper
 
-	install-wrapper:
-		@mkdir -p "$(BINDIR)"
-		@ln -sfn "$(CURDIR)/sandbox-agent" "$(BINDIR)/sandbox-agent"
-		@ln -sfn "$(CURDIR)/sandbox-agent-codex" "$(BINDIR)/sandbox-agent-codex"
-		@ln -sfn "$(CURDIR)/sandbox-agent-copilot" "$(BINDIR)/sandbox-agent-copilot"
-		@ln -sfn "$(CURDIR)/sandbox-agent-opencode" "$(BINDIR)/sandbox-agent-opencode"
-		@echo "Installed: $(BINDIR)/sandbox-agent -> $(CURDIR)/sandbox-agent"
+install-wrapper:
+	@mkdir -p "$(BINDIR)"
+	@ln -sfn "$(CURDIR)/sandbox-agent" "$(BINDIR)/sandbox-agent"
+	@ln -sfn "$(CURDIR)/sandbox-agent-codex" "$(BINDIR)/sandbox-agent-codex"
+	@ln -sfn "$(CURDIR)/sandbox-agent-copilot" "$(BINDIR)/sandbox-agent-copilot"
+	@ln -sfn "$(CURDIR)/sandbox-agent-opencode" "$(BINDIR)/sandbox-agent-opencode"
+	@echo "Installed: $(BINDIR)/sandbox-agent -> $(CURDIR)/sandbox-agent"
 
 selftest:
 	./selftest.sh
