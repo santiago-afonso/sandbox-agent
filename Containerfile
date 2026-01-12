@@ -186,6 +186,10 @@ RUN uv tool install --python "${UV_DEFAULT_PYTHON}" "markitdown[pdf]" \
 
 # Force Node to use the OS CA store (including any EXTRA_CA_CERT_B64 we installed).
 ENV NODE_OPTIONS="--use-openssl-ca"
+# Make globally-installed npm packages importable from plain `node` scripts.
+# Without this, `npm install -g playwright` provides a `playwright` binary but
+# `require("playwright")` fails (Node doesn't resolve global modules by default).
+ENV NODE_PATH=/usr/local/lib/node_modules
 
 # Install the Codex CLI.
 # Allow overriding the npm registry (e.g., corporate mirror) and/or package spec.

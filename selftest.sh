@@ -85,7 +85,21 @@ curl -fsSI https://example.com >/dev/null
 EOF
 echo "[selftest] OK: internet connectivity"
 
-echo "[selftest] (2/3) Check host filesystem isolation (no implicit access)..."
+echo "[selftest] (2/4) Check Playwright + Chromium are usable..."
+"$WRAPPER" --image "$IMAGE" --shell <<'EOF'
+set -euo pipefail
+need_cmd() { command -v "$1" >/dev/null 2>&1 || { echo "[in-container] missing: $1" >&2; exit 1; }; }
+
+need_cmd node
+need_cmd playwright
+need_cmd chromium
+
+node -e 'require("playwright"); console.log("ok: require(playwright)");'
+chromium --version >/dev/null
+EOF
+echo "[selftest] OK: playwright/chromium present"
+
+echo "[selftest] (3/4) Check host filesystem isolation (no implicit access)..."
 "$WRAPPER" --image "$IMAGE" --shell <<EOF
 set -euo pipefail
 
@@ -99,7 +113,7 @@ test ! -e "$HOST_SENTINEL"
 EOF
 echo "[selftest] OK: host-only path not visible without explicit mount"
 
-echo "[selftest] (3/3) Check explicit allowlist mount (RW) works..."
+echo "[selftest] (4/4) Check explicit allowlist mount (RW) works..."
 "$WRAPPER" --image "$IMAGE" --rw "$TMP_HOST_DIR" --shell <<EOF
 set -euo pipefail
 
