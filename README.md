@@ -234,8 +234,9 @@ Controls:
 ### Reuse host helper CLIs (read-pdf)
 
 If you have `read-pdf` installed on the host at `~/.local/bin/read-pdf`, the wrapper will
-mount that executable read-only into the container (without mounting the entire `~/.local/bin`
-directory) so it is available on the container `$PATH`.
+mount that executable (and its helper scripts like `read_pdf_page_candidates.py`) read-only
+into the container (without mounting the entire `~/.local/bin` directory) so it is available
+on the container `$PATH`.
 
 Disable with:
 

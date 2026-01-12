@@ -587,6 +587,16 @@ if [[ "${CODEX_CONTAINER_SANDBOX_DISABLE_LOCAL_BIN_MOUNT:-0}" -ne 1 ]]; then
         tool_path="$(command -v "$tool" 2>/dev/null || true)"
         if [[ "$tool_path" == "$HOME/.local/bin/$tool" ]]; then
           add_ro_mount_unique "$HOME/.local/bin/$tool"
+          # read-pdf expects helper scripts to be installed next to the CLI
+          # (read_pdf_page_candidates.py, etc.). If we only mount the executable,
+          # discovery modes like --toc-pages fail inside the container.
+          if [[ "$tool" == "read-pdf" ]]; then
+            for helper in read_pdf_text.py read_pdf_structure.py read_pdf_search.py read_pdf_page_candidates.py; do
+              if [[ -f "$HOME/.local/bin/$helper" ]]; then
+                add_ro_mount_unique "$HOME/.local/bin/$helper"
+              fi
+            done
+          fi
         fi
       fi
     done
