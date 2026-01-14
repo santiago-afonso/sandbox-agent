@@ -1,7 +1,7 @@
 # AGENTS.md (sandbox-agent)
 
-This repo is vendored as a **git submodule** inside `~/dotfiles/` at:
-- `~/dotfiles/sandbox-agent`
+This repo is vendored as a **git submodule** inside `~/machine-setup/` at:
+- `~/machine-setup/tools/sandbox-agent`
 
 It provides a `sandbox-agent` wrapper that runs agent CLIs inside a Podman container, with a small and intentional set of host mounts to:
 - keep the “yolo + web search” experience reproducible
@@ -19,7 +19,7 @@ It provides a `sandbox-agent` wrapper that runs agent CLIs inside a Podman conta
 Prefer the scripted workflow over one-off Podman commands; the goal is “safe to re-run”:
 
 1) **Build + install**
-   - `cd ~/dotfiles/sandbox-agent && make install`
+   - `cd ~/machine-setup/tools/sandbox-agent && make install`
      - Builds/updates the image (`localhost/sandbox-agent:latest`)
      - Installs/updates the wrapper at `~/.local/bin/sandbox-agent`
 
@@ -32,7 +32,7 @@ Prefer the scripted workflow over one-off Podman commands; the goal is “safe t
    - `codex login`
 
 4) **Run the self-test**
-   - `cd ~/dotfiles/sandbox-agent && ./selftest.sh`
+   - `cd ~/machine-setup/tools/sandbox-agent && ./selftest.sh`
 
 Notes:
 - Use `SANDBOX_CONTAINER_DOCUMENTATION_AND_INSTRUCTIONS.md` for “inside the container” conventions (artifacts under `{workspace}/tmp`, etc.).
@@ -125,7 +125,7 @@ When a new tool/skill is added on the host and you want it usable inside the con
 
 ## Agent Memory
 
-- 2026-01-05: This repo is a git submodule under `~/dotfiles/sandbox-agent`.
+- 2026-01-05: This repo is a git submodule under `~/machine-setup/tools/sandbox-agent`.
 - 2026-01-05: Portability pattern: mount host auth/prompts/skills RO; mount `~/.local/bin`, `uv` tool dirs, and Homebrew prefix RO when needed.
 - 2026-01-05: Enterprise TLS MITM requires explicit CA injection during image build; avoid insecure npm/curl flags.
 - 2026-01-05: WSL portability: default Podman runtime to `runc` (override via env) when `crun` is flaky.

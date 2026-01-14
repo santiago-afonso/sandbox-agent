@@ -27,7 +27,7 @@ Recommended Windows-side command (PowerShell, from the `os_scripts` repo):
 
 Then rebuild the image if needed:
 
-- `cd ~/dotfiles/sandbox-agent && make install`
+- `cd ~/machine-setup/tools/sandbox-agent && make install`
 
 ## Where should I write artifacts?
 
