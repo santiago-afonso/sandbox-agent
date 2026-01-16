@@ -655,24 +655,56 @@ map_path() {
 PODMAN_ARGS=()
 
 # OCI runtime.
-# Prefer the most modern runtime that is actually available. Historically, some
-# WSL setups had flaky `crun` behavior; those cases should set an explicit override.
+# Advanced users can override via CODEX_CONTAINER_SANDBOX_PODMAN_RUNTIME.
+#
+# Default selection policy:
+# - WSL: prefer runc (more stable across WSL setups), else fall back to crun.
+# - non-WSL: prefer crun (modern default in many distros), else fall back to runc.
+
+resolve_runtime_path() {
+  local rt="$1"
+  if [[ "$rt" == */* ]]; then
+    echo "$rt"
+  else
+    command -v "$rt" 2>/dev/null || true
+  fi
+}
+
+runtime_exists() {
+  local rt="$1"
+  local resolved
+  resolved="$(resolve_runtime_path "$rt")"
+  [[ -n "$resolved" && -x "$resolved" ]]
+}
+
+if [[ -n "${CODEX_CONTAINER_SANDBOX_PODMAN_RUNTIME:-}" ]]; then
+  resolved_override="$(resolve_runtime_path "$CODEX_CONTAINER_SANDBOX_PODMAN_RUNTIME")"
+  if [[ -z "$resolved_override" || ! -x "$resolved_override" ]]; then
+    echo "[sandbox-agent] WARN: requested OCI runtime '$CODEX_CONTAINER_SANDBOX_PODMAN_RUNTIME' not found; letting podman choose default." >&2
+    CODEX_CONTAINER_SANDBOX_PODMAN_RUNTIME=""
+  else
+    # Always pass an absolute path so Podman doesn't accidentally select a
+    # different runtime binary via its own config search paths.
+    CODEX_CONTAINER_SANDBOX_PODMAN_RUNTIME="$resolved_override"
+  fi
+fi
+
 if [[ -z "${CODEX_CONTAINER_SANDBOX_PODMAN_RUNTIME:-}" ]]; then
   if is_wsl; then
-    if command -v crun >/dev/null 2>&1; then
-      CODEX_CONTAINER_SANDBOX_PODMAN_RUNTIME="crun"
-    elif command -v runc >/dev/null 2>&1; then
-      CODEX_CONTAINER_SANDBOX_PODMAN_RUNTIME="runc"
+    if runtime_exists runc; then
+      CODEX_CONTAINER_SANDBOX_PODMAN_RUNTIME="$(resolve_runtime_path runc)"
+    elif runtime_exists crun; then
+      CODEX_CONTAINER_SANDBOX_PODMAN_RUNTIME="$(resolve_runtime_path crun)"
+    fi
+  else
+    if runtime_exists crun; then
+      CODEX_CONTAINER_SANDBOX_PODMAN_RUNTIME="$(resolve_runtime_path crun)"
+    elif runtime_exists runc; then
+      CODEX_CONTAINER_SANDBOX_PODMAN_RUNTIME="$(resolve_runtime_path runc)"
     fi
   fi
 fi
 
-if [[ -n "${CODEX_CONTAINER_SANDBOX_PODMAN_RUNTIME:-}" ]]; then
-  if ! command -v "$CODEX_CONTAINER_SANDBOX_PODMAN_RUNTIME" >/dev/null 2>&1; then
-    echo "[sandbox-agent] WARN: requested OCI runtime '$CODEX_CONTAINER_SANDBOX_PODMAN_RUNTIME' not found on PATH; letting podman choose default." >&2
-    CODEX_CONTAINER_SANDBOX_PODMAN_RUNTIME=""
-  fi
-fi
 if [[ -n "${CODEX_CONTAINER_SANDBOX_PODMAN_RUNTIME:-}" ]]; then
   PODMAN_ARGS+=( --runtime "$CODEX_CONTAINER_SANDBOX_PODMAN_RUNTIME" )
 fi

@@ -55,7 +55,15 @@ image:
 	extra_ca_arg=""; \
 	extra_ca_path="$(EXTRA_CA_CERT_PATH)"; \
 	runtime_arg=""; \
-	if [ -n "$(PODMAN_RUNTIME)" ]; then runtime_arg="--runtime $(PODMAN_RUNTIME)"; fi; \
+	if [ -n "$(PODMAN_RUNTIME)" ]; then \
+		runtime_arg="--runtime $(PODMAN_RUNTIME)"; \
+	else \
+		# On WSL2, some environments ship a too-old/broken `crun` as the Podman default, \
+		# which can fail with `crun: unknown version specified`. Prefer `runc` when present. \
+		if grep -qi microsoft /proc/version 2>/dev/null; then \
+			if command -v runc >/dev/null 2>&1; then runtime_arg="--runtime runc"; fi; \
+		fi; \
+	fi; \
 	# Only auto-detect the WBG root cert on the IT-managed WBG laptop. \
 	# On other machines (e.g., home), do not attempt corporate CA injection unless explicitly configured. \
 	if [ -z "$$extra_ca_path" ] && [ "$$(hostname 2>/dev/null || true)" = "PCACL-G7MKN94" ] && [ -r "$$HOME/wbg_root_ca_g2.cer" ]; then \
