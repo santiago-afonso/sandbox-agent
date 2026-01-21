@@ -19,7 +19,7 @@ YQ_VERSION ?= 4.50.1
 INSTALL_PLAYWRIGHT_BROWSERS ?= 1
 PLAYWRIGHT_NPM_PKG ?= playwright@latest
 TICKET_URL ?= https://raw.githubusercontent.com/wedow/ticket/refs/heads/master/ticket
-TICKET_SHA256 ?= 5d596bbef7c35d5c5895a05c743a315313ab69d59e068f16442e033d10e757c1
+TICKET_SHA256 ?= a7ca164d8c511c2368c13e174f42c7c4af9008a5de9aa31c9550edd9b71d6f8f
 
 PREFIX ?= $(HOME)/.local
 BINDIR ?= $(PREFIX)/bin

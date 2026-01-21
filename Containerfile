@@ -224,7 +224,7 @@ RUN npm install -g "${PLAYWRIGHT_NPM_PKG}" \
 # We pin to an expected SHA256 so upstream changes fail loudly and require an
 # intentional update here.
 ARG TICKET_URL="https://raw.githubusercontent.com/wedow/ticket/refs/heads/master/ticket"
-ARG TICKET_SHA256="5d596bbef7c35d5c5895a05c743a315313ab69d59e068f16442e033d10e757c1"
+ARG TICKET_SHA256="a7ca164d8c511c2368c13e174f42c7c4af9008a5de9aa31c9550edd9b71d6f8f"
 RUN curl -fsSL "${TICKET_URL}" -o /usr/local/bin/ticket \
   && if [ -n "${TICKET_SHA256}" ]; then echo "${TICKET_SHA256}  /usr/local/bin/ticket" | sha256sum -c -; fi \
   && chmod 0755 /usr/local/bin/ticket \
