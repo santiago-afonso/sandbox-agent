@@ -394,6 +394,11 @@ if [[ -n "${CODEX_HOME:-}" ]]; then
   else
     echo "[preflight] prompts mount: MISSING ($CODEX_HOME/prompts)"
   fi
+  if [[ -d "$CODEX_HOME/scripts" ]]; then
+    echo "[preflight] scripts mount: present ($CODEX_HOME/scripts)"
+  else
+    echo "[preflight] scripts mount: MISSING ($CODEX_HOME/scripts)"
+  fi
 else
   echo "[preflight] CODEX_HOME is unset"
 fi
@@ -556,6 +561,22 @@ if [[ -n "${SKILLS_HOST:-}" ]]; then
   if [[ ! -d "$SKILLS_HOST" ]] || [[ ! -r "$SKILLS_HOST" ]]; then
     echo "[sandbox-agent] skills dir not readable; skipping mount: $SKILLS_HOST" >&2
     SKILLS_HOST=""
+  fi
+fi
+
+SCRIPTS_HOST=""
+if [[ "${CODEX_CONTAINER_SANDBOX_DISABLE_SCRIPTS_MOUNT:-0}" -ne 1 ]]; then
+  if [[ -n "${CODEX_CONTAINER_SANDBOX_SCRIPTS_DIR:-}" ]]; then
+    SCRIPTS_HOST="$CODEX_CONTAINER_SANDBOX_SCRIPTS_DIR"
+  elif [[ -d "$HOME/.codex/scripts" ]]; then
+    SCRIPTS_HOST="$HOME/.codex/scripts"
+  fi
+fi
+if [[ -n "${SCRIPTS_HOST:-}" ]]; then
+  SCRIPTS_HOST="$(readlink -f "$SCRIPTS_HOST" 2>/dev/null || echo "$SCRIPTS_HOST")"
+  if [[ ! -d "$SCRIPTS_HOST" ]] || [[ ! -r "$SCRIPTS_HOST" ]]; then
+    echo "[sandbox-agent] scripts dir not readable; skipping mount: $SCRIPTS_HOST" >&2
+    SCRIPTS_HOST=""
   fi
 fi
 
@@ -889,6 +910,9 @@ if [[ -n "${PROMPTS_HOST:-}" ]]; then
 fi
 if [[ -n "${SKILLS_HOST:-}" ]]; then
   PODMAN_ARGS+=( -v "$SKILLS_HOST:$STATE_CONT/skills:ro" )
+fi
+if [[ -n "${SCRIPTS_HOST:-}" ]]; then
+  PODMAN_ARGS+=( -v "$SCRIPTS_HOST:$STATE_CONT/scripts:ro" )
 fi
 
 # Host uv tools and Homebrew prefix (optional). These are mounted to their

@@ -11,6 +11,7 @@ Key points:
 - When running `codex`, the wrapper injects “full yolo” behavior (`--dangerously-bypass-approvals-and-sandbox` + `--sandbox danger-full-access`) unless explicitly disabled.
 - Only a bounded set of host paths are mounted into the container (primarily the git workspace + optional RO helper mounts).
 - The container working directory is set to the same path as your host `$PWD`, but under the container’s workspace mount.
+- When present, host `~/.codex/scripts` is mounted read-only into container `$CODEX_HOME/scripts` (disable via `CODEX_CONTAINER_SANDBOX_DISABLE_SCRIPTS_MOUNT=1`).
 
 ## WSL / Podman prerequisites (host-side)
 
