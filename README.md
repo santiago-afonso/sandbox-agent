@@ -4,9 +4,8 @@ A Podman wrapper that runs agent CLIs (primarily `codex`, but also `copilot`, `o
 
 For `codex`, it always uses:
 
-- `--dangerously-bypass-approvals-and-sandbox` (the actual “yolo” behavior)
-- `--sandbox danger-full-access`
-- `--enable web_search_request` (web search tool available to the agent)
+- `--search` (web search tool availability)
+- `--config web_search=live|cached|disabled` (defaults to `cached`, or uses host `~/.codex/config.toml` if set)
 
 Networking is enabled (full egress).
 

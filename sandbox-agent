@@ -223,13 +223,16 @@ if [[ "$TARGET_TOOL" == "codex" ]]; then
 # ----------------------------
 # Normalize web-search config flags (best-effort)
 #
-# Users sometimes try:
-#   --config web_search_request=true
-# but the feature config key is `features.web_search_request` and there is also
-# a first-class `--enable web_search_request` / `--disable web_search_request`.
+# Codex moved from the legacy `features.web_search_request` toggle to a first
+# class `web_search = "live"|"cached"|"disabled"` config key.
 #
-# Treat `--config web_search_request=true|false` as an alias to enable/disable.
-# This avoids a common footgun where search looks "enabled" but the tool isn't.
+# Users may still try:
+#   --config web_search_request=true
+# or:
+#   --enable web_search_request
+#
+# Treat these as aliases so older muscle memory keeps working without emitting
+# deprecation warnings.
 # ----------------------------
 normalized_args=()
 i=0
@@ -239,20 +242,61 @@ while [[ "$i" -lt "${#CODEX_ARGS[@]}" ]]; do
 
   if [[ "$arg" == "--config" || "$arg" == "-c" ]]; then
     if [[ "$next" == web_search_request=true ]]; then
-      normalized_args+=( --enable web_search_request )
+      normalized_args+=( --config web_search=live )
       i=$((i + 2))
       continue
     elif [[ "$next" == web_search_request=false ]]; then
-      normalized_args+=( --disable web_search_request )
+      normalized_args+=( --config web_search=disabled )
       i=$((i + 2))
       continue
     fi
+  fi
+
+  if [[ "$arg" == "--enable" && "$next" == "web_search_request" ]]; then
+    normalized_args+=( --config web_search=live )
+    i=$((i + 2))
+    continue
+  elif [[ "$arg" == "--disable" && "$next" == "web_search_request" ]]; then
+    normalized_args+=( --config web_search=disabled )
+    i=$((i + 2))
+    continue
   fi
 
   normalized_args+=( "$arg" )
   i=$((i + 1))
 done
 CODEX_ARGS=( "${normalized_args[@]}" )
+
+# Determine whether the user explicitly set web_search (via -c/--config).
+has_web_search_config=0
+i=0
+while [[ "$i" -lt "${#CODEX_ARGS[@]}" ]]; do
+  arg="${CODEX_ARGS[$i]}"
+  next="${CODEX_ARGS[$((i+1))]-}"
+  if [[ "$arg" == "--config" || "$arg" == "-c" ]]; then
+    if [[ "$next" == web_search=* ]]; then
+      has_web_search_config=1
+      break
+    fi
+    i=$((i + 2))
+    continue
+  fi
+  i=$((i + 1))
+done
+
+# Default web_search mode (if caller didn't set one).
+#
+# Prefer host ~/.codex/config.toml if it contains a valid web_search setting.
+DEFAULT_WEB_SEARCH="${CODEX_CONTAINER_SANDBOX_DEFAULT_WEB_SEARCH:-cached}"
+if [[ -r "$HOME/.codex/config.toml" ]]; then
+  host_ws="$(
+    sed -n -E 's/^[[:space:]]*web_search[[:space:]]*=[[:space:]]*\"(live|cached|disabled)\".*$/\1/p' \
+      "$HOME/.codex/config.toml" | head -n 1
+  )"
+  if [[ -n "${host_ws:-}" ]]; then
+    DEFAULT_WEB_SEARCH="$host_ws"
+  fi
+fi
 
 # ----------------------------
 # Optional: resume initial prompt stub (empty by default)
@@ -1064,9 +1108,12 @@ case "${TARGET_TOOL:-zsh}" in
     CONTAINER_CMD=( codex )
     # Always enable web search tool availability for the agent.
     #
-    # `--search` is the documented flag. `--enable web_search_request` is a
-    # belt-and-suspenders toggle that forces the underlying feature on as well.
-    CONTAINER_CMD+=( --search --enable web_search_request )
+    # `--search` is the documented flag; web_search mode is configured via
+    # config (`web_search = "live"|"cached"|"disabled"`).
+    CONTAINER_CMD+=( --search )
+    if [[ "$has_web_search_config" -eq 0 ]]; then
+      CONTAINER_CMD+=( --config "web_search=${DEFAULT_WEB_SEARCH}" )
+    fi
     exec_idx=-1
     for i in "${!CODEX_ARGS[@]}"; do
       if [[ "${CODEX_ARGS[$i]}" == "exec" || "${CODEX_ARGS[$i]}" == "e" ]]; then
