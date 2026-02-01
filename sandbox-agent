@@ -24,6 +24,9 @@ set -euo pipefail
 : "${CODEX_CONTAINER_SANDBOX_DISABLE_UV_TOOLS_MOUNT:=0}"
 : "${CODEX_CONTAINER_SANDBOX_DISABLE_UV_PYTHON_MOUNT:=0}"
 : "${CODEX_CONTAINER_SANDBOX_DISABLE_DNS_OVERRIDE:=0}"
+: "${CODEX_CONTAINER_SANDBOX_DISABLE_PI_MOUNT:=0}"
+: "${CODEX_CONTAINER_SANDBOX_DISABLE_PI_HOST_AGENT_MOUNT:=0}"
+: "${CODEX_CONTAINER_SANDBOX_PI_HOST_AGENT_DIR:=}"
 : "${CODEX_CONTAINER_SANDBOX_DISABLE_GIT_IDENTITY_SYNC:=0}"
 : "${CODEX_CONTAINER_SANDBOX_GIT_NAME:=}"
 : "${CODEX_CONTAINER_SANDBOX_GIT_EMAIL:=}"
@@ -161,7 +164,7 @@ OPTIONS
   -h, --help       Show this help
 
 NOTES
-  - Allowed tools: codex, copilot, opencode, zsh, bash
+  - Allowed tools: codex, copilot, opencode, pi, zsh, bash
   - For codex runs, injects: --dangerously-bypass-approvals-and-sandbox and --sandbox danger-full-access (unless disabled).
   - For debugging only, you can disable this injection by setting CODEX_CONTAINER_SANDBOX_DISABLE_YOLO_INJECTION=1.
   - Networking is enabled (no egress restrictions).
@@ -199,7 +202,7 @@ if [[ "$RUN_SHELL" -eq 1 ]]; then
   TARGET_TOOL="bash"
 elif [[ "${#RAW_ARGS[@]}" -ge 1 ]]; then
   case "${RAW_ARGS[0]}" in
-    codex|copilot|opencode|zsh|bash)
+    codex|copilot|opencode|pi|zsh|bash)
       TARGET_TOOL="${RAW_ARGS[0]}"
       TARGET_ARGS=( "${RAW_ARGS[@]:1}" )
       ;;
@@ -417,7 +420,7 @@ check_tools() {
 }
 
 echo "[preflight] --- tool resolution (current shell) ---"
-check_tools codex python3 uv rg curl pandoc mq typst playwright chromium read-pdf markitdown ttok jq yq || true
+check_tools codex pi python3 uv rg curl pandoc mq typst playwright chromium read-pdf markitdown ttok jq yq || true
 
 echo "[preflight] --- tool resolution (login shell: bash -lc) ---"
 if command -v bash >/dev/null 2>&1; then
@@ -471,6 +474,89 @@ fi
 # ----------------------------
 install -d -m 0700 "$CODEX_CONTAINER_SANDBOX_STATE_DIR"
 STATE_CONT="$CONTAINER_HOME/.codex"
+
+# ----------------------------
+# Pi state (host-side)
+#
+# Pi stores state under ~/.pi by default. We do NOT mount host ~/.pi into the
+# container by default. Instead, we provide a wrapper-managed persistent state
+# directory and mount it to container ~/.pi:rw.
+#
+# Separately, we can mount host ~/.pi/agent read-only (extensions/prompts/etc.)
+# into the container at ~/.pi-host/agent so that host customizations are
+# available without allowing in-container mutation.
+# ----------------------------
+PI_STATE_HOST="$CODEX_CONTAINER_SANDBOX_STATE_DIR/pi"
+PI_HOST_AGENT_DIR=""
+
+if [[ "${CODEX_CONTAINER_SANDBOX_DISABLE_PI_MOUNT:-0}" -ne 1 ]]; then
+  install -d -m 0700 "$PI_STATE_HOST"
+  install -d -m 0700 "$PI_STATE_HOST/agent"
+
+  if [[ "${CODEX_CONTAINER_SANDBOX_DISABLE_PI_HOST_AGENT_MOUNT:-0}" -ne 1 ]]; then
+    if [[ -n "${CODEX_CONTAINER_SANDBOX_PI_HOST_AGENT_DIR:-}" ]]; then
+      PI_HOST_AGENT_DIR="$CODEX_CONTAINER_SANDBOX_PI_HOST_AGENT_DIR"
+    elif [[ -d "$HOME/.pi/agent" ]]; then
+      PI_HOST_AGENT_DIR="$HOME/.pi/agent"
+    fi
+
+    if [[ -n "${PI_HOST_AGENT_DIR:-}" ]]; then
+      PI_HOST_AGENT_DIR="$(readlink -f "$PI_HOST_AGENT_DIR" 2>/dev/null || echo "$PI_HOST_AGENT_DIR")"
+      if [[ ! -d "$PI_HOST_AGENT_DIR" ]] || [[ ! -r "$PI_HOST_AGENT_DIR" ]]; then
+        echo "[sandbox-agent] pi host agent dir not readable; skipping mount: $PI_HOST_AGENT_DIR" >&2
+        PI_HOST_AGENT_DIR=""
+      fi
+    fi
+  fi
+
+  # Seed a minimal pi settings.json on first run so the container has the
+  # expected pi packages available without depending on host ~/.pi writes.
+  #
+  # Users remain free to edit this file under the wrapper-managed state dir.
+  PI_SETTINGS_HOST="$PI_STATE_HOST/agent/settings.json"
+  if [[ ! -f "$PI_SETTINGS_HOST" ]]; then
+    host_ext_line=""
+    host_prompt_line=""
+    if [[ -n "${PI_HOST_AGENT_DIR:-}" ]]; then
+      host_ext_line='    "extensions": ["~/.pi-host/agent/extensions"],'
+      host_prompt_line='    "prompts": ["~/.pi-host/agent/prompts"],'
+    fi
+
+    {
+      echo "{"
+      echo "  \"packages\": ["
+      echo "    \"npm:pi-powerline-footer\","
+      echo "    \"npm:pi-mcp-adapter\","
+      echo "    \"npm:pi-interview\","
+      echo "    \"npm:pi-subagents\","
+      echo "    \"npm:pi-rewind-hook\","
+      echo "    \"npm:@marckrenn/pi-sub-core\","
+      echo "    \"npm:@walterra/pi-charts\","
+      echo "    \"npm:@walterra/pi-graphviz\","
+      echo "    \"npm:@marckrenn/pi-sub-bar\","
+      echo "    \"npm:pi-md-export\","
+      echo "    \"npm:pi-threads\","
+      echo "    \"npm:pi-subdir-context\","
+      echo "    \"npm:pi-messenger\","
+      echo "    \"npm:@tmustier/pi-usage-extension\","
+      echo "    \"npm:pi-watch\","
+      echo "    \"npm:pi-screenshots-picker\","
+      echo "    \"npm:pi-skill-palette\","
+      echo "    \"npm:pi-model-switch\","
+      echo "    \"npm:@ogulcancelik/pi-sketch\""
+      echo "  ],"
+      if [[ -n "${host_ext_line:-}" ]]; then
+        echo "${host_ext_line}"
+      fi
+      if [[ -n "${host_prompt_line:-}" ]]; then
+        echo "${host_prompt_line}"
+      fi
+      echo "  \"enableSkillCommands\": true"
+      echo "}"
+    } >"$PI_SETTINGS_HOST"
+    chmod 0600 "$PI_SETTINGS_HOST" >/dev/null 2>&1 || true
+  fi
+fi
 
 # ----------------------------
 # Optional: sync git identity into container global gitconfig
@@ -892,6 +978,16 @@ fi
 # Codex state dir RW
 PODMAN_ARGS+=( -v "$CODEX_CONTAINER_SANDBOX_STATE_DIR:$STATE_CONT:rw" )
 
+# Pi state dir RW (wrapper-managed; mounted to container ~/.pi)
+if [[ "${CODEX_CONTAINER_SANDBOX_DISABLE_PI_MOUNT:-0}" -ne 1 ]]; then
+  PODMAN_ARGS+=( -v "$PI_STATE_HOST:$CONTAINER_HOME/.pi:rw" )
+fi
+
+# Host pi agent dir RO (optional; mounted to container ~/.pi-host/agent)
+if [[ -n "${PI_HOST_AGENT_DIR:-}" ]]; then
+  PODMAN_ARGS+=( -v "$PI_HOST_AGENT_DIR:$CONTAINER_HOME/.pi-host/agent:ro" )
+fi
+
 # Host auth.json (optional). Mount after CODEX_HOME dir so the file overlays.
 if [[ -n "${AUTH_HOST:-}" ]]; then
   case "${CODEX_CONTAINER_SANDBOX_AUTH_MOUNT_MODE:-ro}" in
@@ -954,6 +1050,9 @@ case "${TARGET_TOOL:-zsh}" in
     else
       CONTAINER_CMD=( zsh "${TARGET_ARGS[@]}" )
     fi
+    ;;
+  pi)
+    CONTAINER_CMD=( pi "${TARGET_ARGS[@]}" )
     ;;
   copilot)
     CONTAINER_CMD=( copilot "${TARGET_ARGS[@]}" )

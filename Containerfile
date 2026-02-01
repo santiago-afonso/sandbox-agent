@@ -54,6 +54,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     bash zsh ca-certificates curl git less openssh-client openssl \
     ripgrep \
     jq \
+    graphviz \
     # Self-sufficient “skills/tooling” layer:
     # - image-crop: ImageMagick (convert/identify)
     # - read-pdf: Poppler tools (pdfinfo/pdftoppm) + ImageMagick is handy for follow-on crops
@@ -195,9 +196,38 @@ ENV NODE_PATH=/usr/local/lib/node_modules
 # Allow overriding the npm registry (e.g., corporate mirror) and/or package spec.
 ARG NPM_REGISTRY="https://registry.npmjs.org/"
 ARG CODEX_NPM_PKG="@openai/codex@latest"
-RUN npm config set registry "${NPM_REGISTRY}" \
-  && npm config set cafile /etc/ssl/certs/ca-certificates.crt \
+RUN printf "registry=%s\ncafile=/etc/ssl/certs/ca-certificates.crt\n" "${NPM_REGISTRY}" > /etc/npmrc \
   && npm install -g "${CODEX_NPM_PKG}"
+
+# Pi (pi-mono coding-agent)
+#
+# Pi stores state under ~/.pi by default. When running via the sandbox-agent
+# wrapper, you can mount host ~/.pi into container ~/.pi so sessions, auth, and
+# extensions persist on the host.
+ARG PI_NPM_PKG="@mariozechner/pi-coding-agent@latest"
+ARG INSTALL_PI_PACKAGES="1"
+RUN npm install -g "${PI_NPM_PKG}" \
+  && if [ "${INSTALL_PI_PACKAGES}" = "1" ]; then \
+       pi install npm:pi-powerline-footer; \
+       pi install npm:pi-mcp-adapter; \
+       pi install npm:pi-interview; \
+       pi install npm:pi-subagents; \
+       pi install npm:pi-rewind-hook; \
+       pi install npm:@marckrenn/pi-sub-core; \
+       pi install npm:@walterra/pi-charts; \
+       pi install npm:@walterra/pi-graphviz; \
+       pi install npm:@marckrenn/pi-sub-bar; \
+       pi install npm:pi-md-export; \
+       pi install npm:pi-threads; \
+       pi install npm:pi-subdir-context; \
+       pi install npm:pi-messenger; \
+       pi install npm:@tmustier/pi-usage-extension; \
+       pi install npm:pi-watch; \
+       pi install npm:pi-screenshots-picker; \
+       pi install npm:pi-skill-palette; \
+       pi install npm:pi-model-switch; \
+       pi install npm:@ogulcancelik/pi-sketch; \
+     fi
 
 # Install GitHub Copilot CLI (prerelease).
 ARG COPILOT_NPM_PKG="@github/copilot@prerelease"
@@ -223,8 +253,8 @@ RUN npm install -g "${PLAYWRIGHT_NPM_PKG}" \
 # Install tk/ticket (minimal git-backed ticket tracker).
 # We pin to an expected SHA256 so upstream changes fail loudly and require an
 # intentional update here.
-ARG TICKET_URL="https://raw.githubusercontent.com/wedow/ticket/refs/heads/master/ticket"
-ARG TICKET_SHA256="a7ca164d8c511c2368c13e174f42c7c4af9008a5de9aa31c9550edd9b71d6f8f"
+ARG TICKET_URL="https://raw.githubusercontent.com/wedow/ticket/v0.3.1/ticket"
+ARG TICKET_SHA256="ebe5b4af28525fd336b818b2ef0c681396af2023a24b6850c60df3be1764d7ab"
 RUN curl -fsSL "${TICKET_URL}" -o /usr/local/bin/ticket \
   && if [ -n "${TICKET_SHA256}" ]; then echo "${TICKET_SHA256}  /usr/local/bin/ticket" | sha256sum -c -; fi \
   && chmod 0755 /usr/local/bin/ticket \

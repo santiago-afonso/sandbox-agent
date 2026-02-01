@@ -18,8 +18,14 @@ UV_DEFAULT_PYTHON ?= 3.14
 YQ_VERSION ?= 4.50.1
 INSTALL_PLAYWRIGHT_BROWSERS ?= 1
 PLAYWRIGHT_NPM_PKG ?= playwright@latest
-TICKET_URL ?= https://raw.githubusercontent.com/wedow/ticket/refs/heads/master/ticket
-TICKET_SHA256 ?= a7ca164d8c511c2368c13e174f42c7c4af9008a5de9aa31c9550edd9b71d6f8f
+# NOTE: We intentionally pin ticket/tk to a tag/commit + SHA256 so builds fail
+# loudly if upstream changes (rather than silently pulling a different script).
+TICKET_URL ?= https://raw.githubusercontent.com/wedow/ticket/v0.3.1/ticket
+TICKET_SHA256 ?= ebe5b4af28525fd336b818b2ef0c681396af2023a24b6850c60df3be1764d7ab
+
+# Pi (pi-mono coding-agent)
+PI_NPM_PKG ?= @mariozechner/pi-coding-agent@latest
+INSTALL_PI_PACKAGES ?= 1
 
 PREFIX ?= $(HOME)/.local
 BINDIR ?= $(PREFIX)/bin
@@ -94,12 +100,14 @@ image:
 		--build-arg UV_DEFAULT_PYTHON="$(UV_DEFAULT_PYTHON)" \
 		--build-arg YQ_VERSION="$(YQ_VERSION)" \
 		--build-arg INSTALL_PLAYWRIGHT_BROWSERS="$(INSTALL_PLAYWRIGHT_BROWSERS)" \
-		--build-arg PLAYWRIGHT_NPM_PKG="$(PLAYWRIGHT_NPM_PKG)" \
-		--build-arg TICKET_URL="$(TICKET_URL)" \
-		--build-arg TICKET_SHA256="$(TICKET_SHA256)" \
-		--build-arg NPM_REGISTRY="$(NPM_REGISTRY)" \
-		--build-arg CODEX_NPM_PKG="$(CODEX_NPM_PKG)" \
-		-t "$(IMAGE)" -f Containerfile .
+			--build-arg PLAYWRIGHT_NPM_PKG="$(PLAYWRIGHT_NPM_PKG)" \
+			--build-arg TICKET_URL="$(TICKET_URL)" \
+			--build-arg TICKET_SHA256="$(TICKET_SHA256)" \
+			--build-arg PI_NPM_PKG="$(PI_NPM_PKG)" \
+			--build-arg INSTALL_PI_PACKAGES="$(INSTALL_PI_PACKAGES)" \
+			--build-arg NPM_REGISTRY="$(NPM_REGISTRY)" \
+			--build-arg CODEX_NPM_PKG="$(CODEX_NPM_PKG)" \
+			-t "$(IMAGE)" -f Containerfile .
 
 install: image install-wrapper
 
@@ -109,6 +117,7 @@ install-wrapper:
 	@ln -sfn "$(CURDIR)/sandbox-agent-codex" "$(BINDIR)/sandbox-agent-codex"
 	@ln -sfn "$(CURDIR)/sandbox-agent-copilot" "$(BINDIR)/sandbox-agent-copilot"
 	@ln -sfn "$(CURDIR)/sandbox-agent-opencode" "$(BINDIR)/sandbox-agent-opencode"
+	@ln -sfn "$(CURDIR)/sandbox-agent-pi" "$(BINDIR)/sandbox-agent-pi"
 	@echo "Installed: $(BINDIR)/sandbox-agent -> $(CURDIR)/sandbox-agent"
 
 selftest:

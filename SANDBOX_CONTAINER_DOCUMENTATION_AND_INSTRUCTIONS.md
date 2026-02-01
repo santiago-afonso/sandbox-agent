@@ -83,7 +83,26 @@ The container image aims to be largely self-sufficient for common skills:
 - Typesetting: `typst`
 - Browser automation: `playwright`, `chromium` (headless)
 - Local task tracking: `tk` (also available as `ticket`)
+- Pi coding agent: `pi` (pi-mono `@mariozechner/pi-coding-agent`)
 - Python is **uv-managed** and exposed as `python3` (default target: Python 3.14.x)
+
+## Pi (`pi`) state + mounts
+
+Pi stores its state under:
+- `~/.pi/` (auth, sessions, settings)
+
+When running via the `sandbox-agent` wrapper:
+- The wrapper mounts a **wrapper-managed** host directory into container `~/.pi/` (RW) so pi sessions and auth persist:
+  - Host: `~/.local/state/sandbox-agent/pi`
+  - Container: `~/.pi`
+- If host `~/.pi/agent` exists, it is mounted **read-only** into the container at `~/.pi-host/agent` so host extensions/prompts are available but cannot be modified by in-container agents.
+- Disable pi mounts entirely with: `CODEX_CONTAINER_SANDBOX_DISABLE_PI_MOUNT=1`
+- Disable only the host pi agent mount with: `CODEX_CONTAINER_SANDBOX_DISABLE_PI_HOST_AGENT_MOUNT=1`
+
+Run pi in the container:
+- `sandbox-agent pi`
+- `sandbox-agent pi --help`
+- `sandbox-agent-pi` is a convenience wrapper for `sandbox-agent pi ...`
 
 ## Certificates / corporate TLS interception
 

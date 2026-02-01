@@ -1,6 +1,6 @@
 # sandbox-agent
 
-A Podman wrapper that runs agent CLIs (primarily `codex`, but also `copilot` and `opencode`) inside a container.
+A Podman wrapper that runs agent CLIs (primarily `codex`, but also `copilot`, `opencode`, and `pi`) inside a container.
 
 For `codex`, it always uses:
 
@@ -75,6 +75,7 @@ install -m 0755 ./sandbox-agent ~/.local/bin/sandbox-agent
 install -m 0755 ./sandbox-agent-codex ~/.local/bin/sandbox-agent-codex
 install -m 0755 ./sandbox-agent-copilot ~/.local/bin/sandbox-agent-copilot
 install -m 0755 ./sandbox-agent-opencode ~/.local/bin/sandbox-agent-opencode
+install -m 0755 ./sandbox-agent-pi ~/.local/bin/sandbox-agent-pi
 ```
 
 ### 3) (Optional) Configure mounts
@@ -122,6 +123,12 @@ sandbox-agent
 
 ```bash
 sandbox-agent codex exec "Summarize the repo"
+```
+
+### Pi (pi-mono coding agent)
+
+```bash
+sandbox-agent pi
 ```
 
 ### Makefile helpers
@@ -194,6 +201,8 @@ CODEX_CONTAINER_SANDBOX_DISABLE_GIT_IDENTITY_SYNC=1 sandbox-agent ...
 - The container working directory is set to your original `$PWD` inside that mount.
 - Extra mounts under `$HOME` are mapped to the same relative path under `/home/codex`.
 - `XDG_CACHE_HOME` is set to `$CODEX_HOME/cache` so tools like `uv` have a writable cache by default.
+- Pi state in the container lives under `~/.pi/`, backed by a wrapper-managed host directory: `~/.local/state/sandbox-agent/pi` (disable with `CODEX_CONTAINER_SANDBOX_DISABLE_PI_MOUNT=1`).
+- If host `~/.pi/agent` exists, it is mounted read-only into the container at `~/.pi-host/agent` so you can reuse host extensions/prompts without allowing in-container mutation (disable with `CODEX_CONTAINER_SANDBOX_DISABLE_PI_HOST_AGENT_MOUNT=1`).
 
 ## Auth
 
