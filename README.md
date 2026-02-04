@@ -38,8 +38,11 @@ If TLS is intercepted (transparent proxy / self-signed in chain), pass a corpora
 make install EXTRA_CA_CERT_PATH=$HOME/wbg_root_ca_g2.cer
 ```
 
-If `~/wbg_root_ca_g2.cer` exists, the Makefile auto-detects it on the WBG laptop
-hostname (`PCACL-G7MKN94`) when `EXTRA_CA_CERT_PATH` is not set.
+If `EXTRA_CA_CERT_PATH` is not set, the Makefile auto-detects the WBG root cert
+only on the WBG laptop hostname (`PCACL-G7MKN94`) by checking:
+
+- `~/wbg_root_ca_g2.cer` (local machine file), or
+- `../../wbg_root_ca_g2.cer` (when vendored inside a parent repo, e.g. `machine-setup`)
 
 This cert is **not** stored in the repo; it’s a local machine file and should not be committed.
 

@@ -32,6 +32,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       update-ca-certificates; \
     fi
 
+# Make the system CA bundle the default for tooling used during the build.
+# This keeps cargo/git reliable in TLS interception environments when the
+# corporate root has been added to the OS certificate store above.
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+ENV SSL_CERT_DIR=/etc/ssl/certs
+ENV GIT_SSL_CAINFO=/etc/ssl/certs/ca-certificates.crt
+ENV CARGO_HTTP_CAINFO=/etc/ssl/certs/ca-certificates.crt
+
 ARG MQ_VERSION="0.5.9"
 RUN git clone --depth 1 --branch "v${MQ_VERSION}" https://github.com/harehare/mq.git /src/mq
 WORKDIR /src/mq

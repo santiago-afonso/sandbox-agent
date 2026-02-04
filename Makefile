@@ -72,9 +72,15 @@ image:
 	fi; \
 	# Only auto-detect the WBG root cert on the IT-managed WBG laptop. \
 	# On other machines (e.g., home), do not attempt corporate CA injection unless explicitly configured. \
-	if [ -z "$$extra_ca_path" ] && [ "$$(hostname 2>/dev/null || true)" = "PCACL-G7MKN94" ] && [ -r "$$HOME/wbg_root_ca_g2.cer" ]; then \
-		extra_ca_path="$$HOME/wbg_root_ca_g2.cer"; \
-		echo "Auto-detected EXTRA_CA_CERT_PATH=$$extra_ca_path" >&2; \
+	if [ -z "$$extra_ca_path" ] && [ "$$(hostname 2>/dev/null || true)" = "PCACL-G7MKN94" ]; then \
+		if [ -r "$$HOME/wbg_root_ca_g2.cer" ]; then \
+			extra_ca_path="$$HOME/wbg_root_ca_g2.cer"; \
+			echo "Auto-detected EXTRA_CA_CERT_PATH=$$extra_ca_path" >&2; \
+		elif [ -r "$(CURDIR)/../../wbg_root_ca_g2.cer" ]; then \
+			# When sandbox-agent is vendored inside machine-setup, the cert may live at repo root. \
+			extra_ca_path="$(CURDIR)/../../wbg_root_ca_g2.cer"; \
+			echo "Auto-detected EXTRA_CA_CERT_PATH=$$extra_ca_path" >&2; \
+		fi; \
 	fi; \
 	if [ -n "$$extra_ca_path" ]; then \
 		if [ ! -r "$$extra_ca_path" ]; then \
