@@ -202,9 +202,16 @@ ENV NODE_PATH=/usr/local/lib/node_modules
 
 # Install the Codex CLI.
 # Allow overriding the npm registry (e.g., corporate mirror) and/or package spec.
-ARG NPM_REGISTRY="https://registry.npmjs.org/"
+# Note: the `node:*` images use `/usr/local/etc/npmrc` as the global npmrc
+# (see: `npm config get globalconfig`). Writing `/etc/npmrc` does not reliably
+# affect npm behavior in these images.
+ARG NPM_REGISTRY="https://registry.npmjs.com/"
 ARG CODEX_NPM_PKG="@openai/codex@latest"
-RUN printf "registry=%s\ncafile=/etc/ssl/certs/ca-certificates.crt\n" "${NPM_REGISTRY}" > /etc/npmrc \
+RUN printf "registry=%s\ncafile=/etc/ssl/certs/ca-certificates.crt\n" "${NPM_REGISTRY}" > /usr/local/etc/npmrc \
+  && npm config set fetch-retries 5 \
+  && npm config set fetch-retry-mintimeout 20000 \
+  && npm config set fetch-retry-maxtimeout 120000 \
+  && npm config set fetch-timeout 600000 \
   && npm install -g "${CODEX_NPM_PKG}"
 
 # Pi (pi-mono coding-agent)
