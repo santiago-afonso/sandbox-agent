@@ -13,6 +13,48 @@ Key points:
 - The container working directory is set to the same path as your host `$PWD`, but under the container’s workspace mount.
 - When present, host `~/.codex/scripts` is mounted read-only into container `$CODEX_HOME/scripts` (disable via `CODEX_CONTAINER_SANDBOX_DISABLE_SCRIPTS_MOUNT=1`).
 
+## LLM credential passthrough
+
+By default, `sandbox-agent` forwards a curated allowlist of common LLM provider
+credential env vars from host to container (only when each variable exists on
+the host shell environment):
+
+- `OPENAI_API_KEY`
+- `ANTHROPIC_API_KEY`
+- `GEMINI_API_KEY`
+- `GOOGLE_API_KEY`
+- `GOOGLE_GENAI_API_KEY`
+- `AZURE_OPENAI_API_KEY`
+- `AZURE_OPENAI_ENDPOINT`
+- `ELEVENLABS_API_KEY`
+- `MISTRAL_API_KEY`
+- `COHERE_API_KEY`
+- `GROQ_API_KEY`
+- `PERPLEXITY_API_KEY`
+- `TOGETHER_API_KEY`
+- `FIREWORKS_API_KEY`
+- `OPENROUTER_API_KEY`
+- `XAI_API_KEY`
+- `DEEPSEEK_API_KEY`
+- `CEREBRAS_API_KEY`
+- `AWS_ACCESS_KEY_ID`
+- `AWS_SECRET_ACCESS_KEY`
+- `AWS_SESSION_TOKEN`
+- `AWS_REGION`
+- `AWS_DEFAULT_REGION`
+- `AWS_PROFILE`
+
+Configure in `~/.config/sandbox-agent/config.sh`:
+
+- Add extra pass-through vars:
+  - `CODEX_CONTAINER_SANDBOX_ENV_PASSTHROUGH+=(MY_EXTRA_API_KEY)`
+- Disable defaults and provide your own explicit allowlist:
+  - `CODEX_CONTAINER_SANDBOX_DISABLE_DEFAULT_ENV_PASSTHROUGH=1`
+  - `CODEX_CONTAINER_SANDBOX_ENV_PASSTHROUGH=(VAR_A VAR_B)`
+
+For multiple accounts/projects, switch profiles on the host before launching
+`sandbox-agent` so only the active profile vars are propagated.
+
 ## WSL / Podman prerequisites (host-side)
 
 If you are running on **WSL2**, modern Podman works best with:

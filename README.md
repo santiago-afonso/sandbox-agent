@@ -111,6 +111,17 @@ CODEX_CONTAINER_SANDBOX_RW_MOUNTS=(
   "$HOME/.cache/uv"
   "$HOME/tmp"
 )
+
+# Optional: add host env vars to pass through into the container.
+# Defaults already include common LLM providers + AWS Bedrock credentials.
+# CODEX_CONTAINER_SANDBOX_ENV_PASSTHROUGH+=(MY_EXTRA_API_KEY)
+#
+# Optional: disable default passthrough list, then define an explicit allowlist.
+# CODEX_CONTAINER_SANDBOX_DISABLE_DEFAULT_ENV_PASSTHROUGH=1
+# CODEX_CONTAINER_SANDBOX_ENV_PASSTHROUGH=(
+#   GEMINI_API_KEY
+#   GOOGLE_API_KEY
+# )
 ```
 
 ## Usage
@@ -241,6 +252,44 @@ Controls:
 - Disable:
   - `CODEX_CONTAINER_SANDBOX_DISABLE_PROMPTS_MOUNT=1`
   - `CODEX_CONTAINER_SANDBOX_DISABLE_SKILLS_MOUNT=1`
+
+## LLM env passthrough
+
+The wrapper forwards a default allowlist of provider credential environment
+variables from host to container (only when each variable is present on host):
+
+- `OPENAI_API_KEY`
+- `ANTHROPIC_API_KEY`
+- `GEMINI_API_KEY`
+- `GOOGLE_API_KEY`
+- `GOOGLE_GENAI_API_KEY`
+- `AZURE_OPENAI_API_KEY`
+- `AZURE_OPENAI_ENDPOINT`
+- `ELEVENLABS_API_KEY`
+- `MISTRAL_API_KEY`
+- `COHERE_API_KEY`
+- `GROQ_API_KEY`
+- `PERPLEXITY_API_KEY`
+- `TOGETHER_API_KEY`
+- `FIREWORKS_API_KEY`
+- `OPENROUTER_API_KEY`
+- `XAI_API_KEY`
+- `DEEPSEEK_API_KEY`
+- `CEREBRAS_API_KEY`
+- `AWS_ACCESS_KEY_ID`
+- `AWS_SECRET_ACCESS_KEY`
+- `AWS_SESSION_TOKEN`
+- `AWS_REGION`
+- `AWS_DEFAULT_REGION`
+- `AWS_PROFILE`
+
+Customization:
+
+- Add extra vars in `~/.config/sandbox-agent/config.sh`:
+  - `CODEX_CONTAINER_SANDBOX_ENV_PASSTHROUGH+=(MY_EXTRA_API_KEY)`
+- Replace defaults with your own explicit list:
+  - `CODEX_CONTAINER_SANDBOX_DISABLE_DEFAULT_ENV_PASSTHROUGH=1`
+  - `CODEX_CONTAINER_SANDBOX_ENV_PASSTHROUGH=(VAR_A VAR_B)`
 
 ### Reuse host helper CLIs (read-pdf)
 
