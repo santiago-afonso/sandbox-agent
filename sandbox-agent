@@ -584,8 +584,8 @@ if [[ "${CODEX_CONTAINER_SANDBOX_DISABLE_PI_MOUNT:-0}" -ne 1 ]]; then
     fi
   fi
 
-  # Seed a minimal pi settings.json on first run so the container has the
-  # expected pi packages available without depending on host ~/.pi writes.
+  # Seed a minimal pi settings.json on first run so settings exist in the
+  # wrapper-managed state dir without depending on host ~/.pi writes.
   #
   # Users remain free to edit this file under the wrapper-managed state dir.
   PI_SETTINGS_HOST="$PI_STATE_HOST/agent/settings.json"
@@ -599,27 +599,6 @@ if [[ "${CODEX_CONTAINER_SANDBOX_DISABLE_PI_MOUNT:-0}" -ne 1 ]]; then
 
     {
       echo "{"
-      echo "  \"packages\": ["
-      echo "    \"npm:pi-powerline-footer\","
-      echo "    \"npm:pi-mcp-adapter\","
-      echo "    \"npm:pi-interview\","
-      echo "    \"npm:pi-subagents\","
-      echo "    \"npm:pi-rewind-hook\","
-      echo "    \"npm:@marckrenn/pi-sub-core\","
-      echo "    \"npm:@walterra/pi-charts\","
-      echo "    \"npm:@walterra/pi-graphviz\","
-      echo "    \"npm:@marckrenn/pi-sub-bar\","
-      echo "    \"npm:pi-md-export\","
-      echo "    \"npm:pi-threads\","
-      echo "    \"npm:pi-subdir-context\","
-      echo "    \"npm:pi-messenger\","
-      echo "    \"npm:@tmustier/pi-usage-extension\","
-      echo "    \"npm:pi-watch\","
-      echo "    \"npm:pi-screenshots-picker\","
-      echo "    \"npm:pi-skill-palette\","
-      echo "    \"npm:pi-model-switch\","
-      echo "    \"npm:@ogulcancelik/pi-sketch\""
-      echo "  ],"
       if [[ -n "${host_ext_line:-}" ]]; then
         echo "${host_ext_line}"
       fi

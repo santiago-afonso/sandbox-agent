@@ -144,6 +144,9 @@ sandbox-agent codex exec "Summarize the repo"
 sandbox-agent pi
 ```
 
+`pi` is available in the image, but sandbox-agent does not auto-install pi
+plugins/packages. Install only what you need in your `~/.pi/` state.
+
 ### Makefile helpers
 
 From the repo root:
@@ -216,6 +219,7 @@ CODEX_CONTAINER_SANDBOX_DISABLE_GIT_IDENTITY_SYNC=1 sandbox-agent ...
 - `XDG_CACHE_HOME` is set to `$CODEX_HOME/cache` so tools like `uv` have a writable cache by default.
 - Pi state in the container lives under `~/.pi/`, backed by a wrapper-managed host directory: `~/.local/state/sandbox-agent/pi` (disable with `CODEX_CONTAINER_SANDBOX_DISABLE_PI_MOUNT=1`).
 - If host `~/.pi/agent` exists, it is mounted read-only into the container at `~/.pi-host/agent` so you can reuse host extensions/prompts without allowing in-container mutation (disable with `CODEX_CONTAINER_SANDBOX_DISABLE_PI_HOST_AGENT_MOUNT=1`).
+- sandbox-agent does not seed pi harness plugins into `~/.pi/agent/settings.json`.
 
 ## Auth
 

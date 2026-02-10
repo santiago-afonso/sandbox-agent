@@ -220,29 +220,7 @@ RUN printf "registry=%s\ncafile=/etc/ssl/certs/ca-certificates.crt\n" "${NPM_REG
 # wrapper, you can mount host ~/.pi into container ~/.pi so sessions, auth, and
 # extensions persist on the host.
 ARG PI_NPM_PKG="@mariozechner/pi-coding-agent@latest"
-ARG INSTALL_PI_PACKAGES="1"
-RUN npm install -g "${PI_NPM_PKG}" \
-  && if [ "${INSTALL_PI_PACKAGES}" = "1" ]; then \
-       pi install npm:pi-powerline-footer; \
-       pi install npm:pi-mcp-adapter; \
-       pi install npm:pi-interview; \
-       pi install npm:pi-subagents; \
-       pi install npm:pi-rewind-hook; \
-       pi install npm:@marckrenn/pi-sub-core; \
-       pi install npm:@walterra/pi-charts; \
-       pi install npm:@walterra/pi-graphviz; \
-       pi install npm:@marckrenn/pi-sub-bar; \
-       pi install npm:pi-md-export; \
-       pi install npm:pi-threads; \
-       pi install npm:pi-subdir-context; \
-       pi install npm:pi-messenger; \
-       pi install npm:@tmustier/pi-usage-extension; \
-       pi install npm:pi-watch; \
-       pi install npm:pi-screenshots-picker; \
-       pi install npm:pi-skill-palette; \
-       pi install npm:pi-model-switch; \
-       pi install npm:@ogulcancelik/pi-sketch; \
-     fi
+RUN npm install -g "${PI_NPM_PKG}"
 
 # Install GitHub Copilot CLI (prerelease).
 ARG COPILOT_NPM_PKG="@github/copilot@prerelease"

@@ -145,6 +145,7 @@ Run pi in the container:
 - `sandbox-agent pi`
 - `sandbox-agent pi --help`
 - `sandbox-agent-pi` is a convenience wrapper for `sandbox-agent pi ...`
+- `pi` is installed, but sandbox-agent does not auto-install or seed pi harness plugins/packages.
 
 ## Certificates / corporate TLS interception
 
