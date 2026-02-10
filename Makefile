@@ -1,4 +1,4 @@
-.PHONY: help image install install-wrapper selftest pii-scan validate-docs
+.PHONY: help image install install-wrapper selftest selftest-instructions pii-scan validate-docs
 
 PODMAN ?= podman
 PODMAN_RUNTIME ?=
@@ -38,6 +38,7 @@ help:
 	@echo "  install        Build image + symlink wrapper into ~/.local/bin"
 	@echo "  install-wrapper  Symlink wrapper into ~/.local/bin (no image build)"
 	@echo "  selftest       Run network + mount isolation self-test"
+	@echo "  selftest-instructions  Run exhaustive instruction-flag matrix checks"
 	@echo "  pii-scan       Scan repo for common secret/PII patterns"
 	@echo "  validate-docs  Validate README paths for standalone repo use"
 
@@ -128,6 +129,9 @@ install-wrapper:
 
 selftest:
 	./selftest.sh
+
+selftest-instructions:
+	./scripts/test_instruction_flags.sh
 
 pii-scan:
 	./scripts/pii_scan.sh

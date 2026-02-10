@@ -90,9 +90,10 @@ CODEX_CONTAINER_SANDBOX_IMAGE="localhost/sandbox-agent:latest"
 # Optional: force an OCI runtime (useful on some WSL/work setups).
 # CODEX_CONTAINER_SANDBOX_PODMAN_RUNTIME="runc"
 
-# Optional: override DNS servers used inside the container (default is pinned).
-# Disable the override to inherit host/Podman DNS behavior:
-# CODEX_CONTAINER_SANDBOX_DISABLE_DNS_OVERRIDE=1
+# Optional: override DNS servers used inside the container.
+# Default behavior is to inherit host/Podman DNS.
+# Enable override explicitly:
+# CODEX_CONTAINER_SANDBOX_DISABLE_DNS_OVERRIDE=0
 # Or override the server list (in order):
 # CODEX_CONTAINER_SANDBOX_DNS_SERVERS=(45.90.28.212 45.90.30.212 1.1.1.1 8.8.8.8)
 #
@@ -138,6 +139,48 @@ sandbox-agent
 sandbox-agent codex exec "Summarize the repo"
 ```
 
+### Instruction-source dry run (recommended)
+
+Prints effective global/project AGENTS sources and mount targets without launching the container:
+
+```bash
+sandbox-agent --dry-run-instructions codex exec "noop"
+```
+
+### Project AGENTS modes for `codex exec`
+
+For `sandbox-agent codex exec`, project AGENTS behavior is explicit and mode-driven:
+
+- `suppress` (default): do not mount project `AGENTS.md`
+- `repo`: mount repo-root `AGENTS.md`
+- `replace`: mount a custom project AGENTS file
+- `concat`: compose `custom + repo` (custom first), then mount combined file
+
+Examples:
+
+```bash
+# Use repo AGENTS.md
+sandbox-agent --project-agents-mode repo codex exec "..."
+
+# Replace project AGENTS.md with a custom file
+sandbox-agent --project-agents-mode replace --project-agents-file ~/my-project-agents.md codex exec "..."
+
+# Concatenate custom + repo AGENTS
+sandbox-agent --project-agents-mode concat --project-agents-file ~/.codex/AGENTS.md codex exec "..."
+```
+
+You can also pin an explicit global AGENTS file for codex exec:
+
+```bash
+sandbox-agent --global-agents-file ~/machine-setup/tools/sandbox-agent/SANDBOXED-AGENT-AGENTS.md codex exec "..."
+```
+
+Single preset to combine sandbox global AGENTS + host `~/.codex/AGENTS.md` (as project concat):
+
+```bash
+sandbox-agent --instruction-profile host-plus-sandbox codex exec "..."
+```
+
 ### Pi (pi-mono coding agent)
 
 ```bash
@@ -154,17 +197,20 @@ From the repo root:
 ```bash
 make image
 make selftest
+make selftest-instructions
 make pii-scan
 make validate-docs
 ```
 
 ### Self-test (network + mount isolation)
 
-Runs three checks:
+Runs five checks:
 
 1. Container has internet connectivity.
-2. Host files outside the workspace are not visible by default.
-3. An explicitly mounted host directory is readable and writable (RW mount).
+2. Playwright + Chromium are usable.
+3. Host files outside the workspace are not visible by default.
+4. An explicitly mounted host directory is readable and writable (RW mount).
+5. Instruction-source flag matrix passes (`scripts/test_instruction_flags.sh`).
 
 ```bash
 ./selftest.sh
@@ -215,6 +261,7 @@ CODEX_CONTAINER_SANDBOX_DISABLE_GIT_IDENTITY_SYNC=1 sandbox-agent ...
 
 - If you run inside a git repo, the **repo root** is mounted read-write.
 - The container working directory is set to your original `$PWD` inside that mount.
+- For `codex exec`, global AGENTS is mounted from canonical `SANDBOXED-AGENT-AGENTS.md` to container `~/.codex/AGENTS.md` (or from `--global-agents-file` when provided).
 - Extra mounts under `$HOME` are mapped to the same relative path under `/home/codex`.
 - `XDG_CACHE_HOME` is set to `$CODEX_HOME/cache` so tools like `uv` have a writable cache by default.
 - Pi state in the container lives under `~/.pi/`, backed by a wrapper-managed host directory: `~/.local/state/sandbox-agent/pi` (disable with `CODEX_CONTAINER_SANDBOX_DISABLE_PI_MOUNT=1`).

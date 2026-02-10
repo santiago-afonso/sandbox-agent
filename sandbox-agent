@@ -23,7 +23,7 @@ set -euo pipefail
 : "${CODEX_CONTAINER_SANDBOX_DISABLE_LOCAL_BIN_MOUNT:=0}"
 : "${CODEX_CONTAINER_SANDBOX_DISABLE_UV_TOOLS_MOUNT:=0}"
 : "${CODEX_CONTAINER_SANDBOX_DISABLE_UV_PYTHON_MOUNT:=0}"
-: "${CODEX_CONTAINER_SANDBOX_DISABLE_DNS_OVERRIDE:=0}"
+: "${CODEX_CONTAINER_SANDBOX_DISABLE_DNS_OVERRIDE:=1}"
 : "${CODEX_CONTAINER_SANDBOX_DISABLE_DEFAULT_ENV_PASSTHROUGH:=0}"
 : "${CODEX_CONTAINER_SANDBOX_DISABLE_PI_MOUNT:=0}"
 : "${CODEX_CONTAINER_SANDBOX_DISABLE_PI_HOST_AGENT_MOUNT:=0}"
@@ -34,6 +34,11 @@ set -euo pipefail
 : "${CODEX_CONTAINER_SANDBOX_RESUME_FIRST_PROMPT:=}"
 : "${CODEX_CONTAINER_SANDBOX_PREFLIGHT_SCRIPT_REL:=tmp/sandbox-agent/preflight.sh}"
 : "${CODEX_CONTAINER_SANDBOX_DISABLE_YOLO_INJECTION:=0}"
+: "${CODEX_CONTAINER_SANDBOX_GLOBAL_AGENTS_FILE:=}"
+: "${CODEX_CONTAINER_SANDBOX_INSTRUCTION_PROFILE:=}"
+: "${CODEX_CONTAINER_SANDBOX_PROJECT_AGENTS_MODE:=suppress}"
+: "${CODEX_CONTAINER_SANDBOX_PROJECT_AGENTS_FILE:=}"
+: "${CODEX_CONTAINER_SANDBOX_DRY_RUN_INSTRUCTIONS:=0}"
 
 # If set to 1, prints the computed podman command.
 : "${CODEX_CONTAINER_SANDBOX_DEBUG:=0}"
@@ -145,7 +150,8 @@ fi
 # non-interactive runs (e.g., `codex exec` tool invocations). These often stem
 # from inheriting unstable host/WSL DNS forwarders.
 #
-# By default, pin the container resolvers to:
+# By default, inherit Podman/host DNS (`CODEX_CONTAINER_SANDBOX_DISABLE_DNS_OVERRIDE=1`).
+# If override is enabled, pin the container resolvers to:
 # - NextDNS (primary): 45.90.28.212, 45.90.30.212
 # - Cloudflare (secondary): 1.1.1.1
 # - Google (tertiary): 8.8.8.8
@@ -154,8 +160,8 @@ fi
 #   CODEX_CONTAINER_SANDBOX_DNS_SERVERS=(...)
 # or
 #   CODEX_CONTAINER_SANDBOX_DNS_SERVERS="ip1 ip2 ..."
-# Disable entirely with:
-#   CODEX_CONTAINER_SANDBOX_DISABLE_DNS_OVERRIDE=1
+# Enable override explicitly with:
+#   CODEX_CONTAINER_SANDBOX_DISABLE_DNS_OVERRIDE=0
 # ----------------------------
 DNS_SERVERS_DEFAULT=(45.90.28.212 45.90.30.212 1.1.1.1 8.8.8.8)
 DNS_SERVERS=()
@@ -187,6 +193,11 @@ OPTIONS
   --ro PATH        Bind-mount PATH read-only (repeatable)
   --rw PATH        Bind-mount PATH read-write (repeatable)
   --state DIR      Host state dir for Codex HOME inside container
+  --global-agents-file PATH  Global AGENTS source for codex exec ($CODEX_HOME/AGENTS.md)
+  --instruction-profile NAME Preset for codex exec instruction wiring (host-plus-sandbox)
+  --project-agents-mode MODE Project AGENTS mode for codex exec: suppress|repo|replace|concat
+  --project-agents-file PATH Project AGENTS source file for replace/concat modes
+  --dry-run-instructions Print effective instruction sources and exit
   --debug          Print the computed podman command
   --print-codex-cmd Print the computed container command (default)
   --no-print-codex-cmd Disable printing the container command
@@ -216,6 +227,11 @@ while [[ $# -gt 0 ]]; do
     --ro) SANDBOX_RO_MOUNTS+=("${2:?missing PATH}"); shift 2 ;;
     --rw) SANDBOX_RW_MOUNTS+=("${2:?missing PATH}"); shift 2 ;;
     --state) CODEX_CONTAINER_SANDBOX_STATE_DIR="${2:?missing DIR}"; shift 2 ;;
+    --global-agents-file) CODEX_CONTAINER_SANDBOX_GLOBAL_AGENTS_FILE="${2:?missing PATH}"; shift 2 ;;
+    --instruction-profile) CODEX_CONTAINER_SANDBOX_INSTRUCTION_PROFILE="${2:?missing NAME}"; shift 2 ;;
+    --project-agents-mode) CODEX_CONTAINER_SANDBOX_PROJECT_AGENTS_MODE="${2:?missing MODE}"; shift 2 ;;
+    --project-agents-file) CODEX_CONTAINER_SANDBOX_PROJECT_AGENTS_FILE="${2:?missing PATH}"; shift 2 ;;
+    --dry-run-instructions) CODEX_CONTAINER_SANDBOX_DRY_RUN_INSTRUCTIONS=1; shift ;;
     --debug) CODEX_CONTAINER_SANDBOX_DEBUG=1; shift ;;
     --print-codex-cmd) CODEX_CONTAINER_SANDBOX_PRINT_CODEX_CMD=1; shift ;;
     --no-print-codex-cmd) CODEX_CONTAINER_SANDBOX_PRINT_CODEX_CMD=0; shift ;;
@@ -403,6 +419,16 @@ EOF
     fi
   fi
 fi
+fi
+
+CODEX_IS_EXEC=0
+if [[ "$TARGET_TOOL" == "codex" ]]; then
+  for arg in "${CODEX_ARGS[@]}"; do
+    if [[ "$arg" == "exec" || "$arg" == "e" ]]; then
+      CODEX_IS_EXEC=1
+      break
+    fi
+  done
 fi
 
 # ----------------------------
@@ -1019,18 +1045,129 @@ PODMAN_ARGS+=( --env "XDG_CACHE_HOME=$STATE_CONT/cache" )
 # Workspace RW (root or current dir)
 PODMAN_ARGS+=( -v "$WORKSPACE_ROOT_HOST:$WORKSPACE_ROOT_CONT:rw" )
 
-# Make the repo-root AGENTS.md read-only inside the container (overlay mount).
-# This prevents in-container agents from modifying durable repo heuristics/memory
-# while keeping the rest of the workspace writable.
-#
-# Note: Some repos may not have AGENTS.md; only apply when present.
-AGENTS_HOST="$WORKSPACE_ROOT_HOST/AGENTS.md"
-if [[ -f "$AGENTS_HOST" ]]; then
-  PODMAN_ARGS+=( -v "$(readlink -f "$AGENTS_HOST"):$WORKSPACE_ROOT_CONT/AGENTS.md:ro" )
+PROJECT_AGENTS_MODE_EFFECTIVE="repo"
+PROJECT_AGENTS_FILE_EFFECTIVE=""
+PROJECT_AGENTS_MOUNT_HOST=""
+GLOBAL_AGENTS_MOUNT_HOST=""
+INSTRUCTION_PROFILE_EFFECTIVE="${CODEX_CONTAINER_SANDBOX_INSTRUCTION_PROFILE:-}"
+
+if [[ "$CODEX_IS_EXEC" -eq 1 ]]; then
+  INSTRUCTION_PROFILE_EFFECTIVE="${CODEX_CONTAINER_SANDBOX_INSTRUCTION_PROFILE:-}"
+  if [[ -n "$INSTRUCTION_PROFILE_EFFECTIVE" ]]; then
+    case "$INSTRUCTION_PROFILE_EFFECTIVE" in
+      host-plus-sandbox)
+        if [[ "${CODEX_CONTAINER_SANDBOX_PROJECT_AGENTS_MODE:-suppress}" == "suppress" && -z "${CODEX_CONTAINER_SANDBOX_PROJECT_AGENTS_FILE:-}" ]]; then
+          CODEX_CONTAINER_SANDBOX_PROJECT_AGENTS_MODE="concat"
+          CODEX_CONTAINER_SANDBOX_PROJECT_AGENTS_FILE="$HOME/.codex/AGENTS.md"
+        fi
+        ;;
+      *)
+        echo "[sandbox-agent] invalid --instruction-profile: $INSTRUCTION_PROFILE_EFFECTIVE (expected host-plus-sandbox)" >&2
+        exit 2
+        ;;
+    esac
+  fi
+
+  PROJECT_AGENTS_MODE_EFFECTIVE="${CODEX_CONTAINER_SANDBOX_PROJECT_AGENTS_MODE:-suppress}"
+  PROJECT_AGENTS_MODE_EFFECTIVE="$(echo "$PROJECT_AGENTS_MODE_EFFECTIVE" | tr '[:upper:]' '[:lower:]')"
+  case "$PROJECT_AGENTS_MODE_EFFECTIVE" in
+    suppress|repo|replace|concat) ;;
+    *)
+      echo "[sandbox-agent] invalid project AGENTS mode: $PROJECT_AGENTS_MODE_EFFECTIVE (expected suppress|repo|replace|concat)" >&2
+      exit 2
+      ;;
+  esac
+
+  REPO_AGENTS_HOST="$WORKSPACE_ROOT_HOST/AGENTS.md"
+  if [[ -n "${CODEX_CONTAINER_SANDBOX_PROJECT_AGENTS_FILE:-}" ]]; then
+    PROJECT_AGENTS_FILE_EFFECTIVE="$(readlink -f "$CODEX_CONTAINER_SANDBOX_PROJECT_AGENTS_FILE" 2>/dev/null || echo "$CODEX_CONTAINER_SANDBOX_PROJECT_AGENTS_FILE")"
+  fi
+
+  case "$PROJECT_AGENTS_MODE_EFFECTIVE" in
+    suppress) ;;
+    repo)
+      if [[ -f "$REPO_AGENTS_HOST" ]]; then
+        PROJECT_AGENTS_MOUNT_HOST="$REPO_AGENTS_HOST"
+      fi
+      ;;
+    replace|concat)
+      if [[ -z "$PROJECT_AGENTS_FILE_EFFECTIVE" ]]; then
+        echo "[sandbox-agent] --project-agents-mode $PROJECT_AGENTS_MODE_EFFECTIVE requires --project-agents-file (or CODEX_CONTAINER_SANDBOX_PROJECT_AGENTS_FILE)." >&2
+        exit 2
+      fi
+      if [[ ! -f "$PROJECT_AGENTS_FILE_EFFECTIVE" || ! -r "$PROJECT_AGENTS_FILE_EFFECTIVE" ]]; then
+        echo "[sandbox-agent] project AGENTS file not readable: $PROJECT_AGENTS_FILE_EFFECTIVE" >&2
+        exit 2
+      fi
+
+      if [[ "$PROJECT_AGENTS_MODE_EFFECTIVE" == "replace" ]]; then
+        PROJECT_AGENTS_MOUNT_HOST="$PROJECT_AGENTS_FILE_EFFECTIVE"
+      else
+        root_fingerprint="$(printf '%s' "$WORKSPACE_ROOT_HOST" | sha256sum | awk '{print substr($1,1,12)}')"
+        concat_path="$CODEX_CONTAINER_SANDBOX_STATE_DIR/project_agents_concat_${root_fingerprint}.md"
+        {
+          cat "$PROJECT_AGENTS_FILE_EFFECTIVE"
+          echo ""
+          echo "---"
+          echo "# Repo AGENTS Context (appended by sandbox-agent concat mode)"
+          if [[ -f "$REPO_AGENTS_HOST" ]]; then
+            cat "$REPO_AGENTS_HOST"
+          else
+            echo "(repo AGENTS.md not found at $REPO_AGENTS_HOST)"
+          fi
+        } >"$concat_path"
+        chmod 0600 "$concat_path" >/dev/null 2>&1 || true
+        PROJECT_AGENTS_MOUNT_HOST="$concat_path"
+      fi
+      ;;
+  esac
+
+  if [[ -n "${CODEX_CONTAINER_SANDBOX_GLOBAL_AGENTS_FILE:-}" ]]; then
+    GLOBAL_AGENTS_MOUNT_HOST="$(readlink -f "$CODEX_CONTAINER_SANDBOX_GLOBAL_AGENTS_FILE" 2>/dev/null || echo "$CODEX_CONTAINER_SANDBOX_GLOBAL_AGENTS_FILE")"
+  else
+    global_agents_candidates=(
+      "$WORKSPACE_ROOT_HOST/tools/sandbox-agent/SANDBOXED-AGENT-AGENTS.md"
+      "$HOME/machine-setup/tools/sandbox-agent/SANDBOXED-AGENT-AGENTS.md"
+      "$HOME/.codex/SANDBOXED-AGENT-AGENTS.md"
+    )
+    for candidate in "${global_agents_candidates[@]}"; do
+      if [[ -f "$candidate" && -r "$candidate" ]]; then
+        GLOBAL_AGENTS_MOUNT_HOST="$(readlink -f "$candidate" 2>/dev/null || echo "$candidate")"
+        break
+      fi
+    done
+  fi
+
+  if [[ -z "$GLOBAL_AGENTS_MOUNT_HOST" ]]; then
+    echo "[sandbox-agent] could not resolve SANDBOXED global AGENTS file." >&2
+    echo "[sandbox-agent] set --global-agents-file or CODEX_CONTAINER_SANDBOX_GLOBAL_AGENTS_FILE to an explicit path." >&2
+    exit 2
+  fi
+  if [[ ! -f "$GLOBAL_AGENTS_MOUNT_HOST" || ! -r "$GLOBAL_AGENTS_MOUNT_HOST" ]]; then
+    echo "[sandbox-agent] global AGENTS file not readable: $GLOBAL_AGENTS_MOUNT_HOST" >&2
+    exit 2
+  fi
+else
+  # Keep backward-compatible behavior for non-codex-exec commands in this MVP.
+  AGENTS_HOST="$WORKSPACE_ROOT_HOST/AGENTS.md"
+  if [[ -f "$AGENTS_HOST" ]]; then
+    PROJECT_AGENTS_MOUNT_HOST="$AGENTS_HOST"
+    PROJECT_AGENTS_MODE_EFFECTIVE="repo"
+  else
+    PROJECT_AGENTS_MODE_EFFECTIVE="suppress"
+  fi
+fi
+
+if [[ -n "$PROJECT_AGENTS_MOUNT_HOST" ]]; then
+  PODMAN_ARGS+=( -v "$(readlink -f "$PROJECT_AGENTS_MOUNT_HOST"):$WORKSPACE_ROOT_CONT/AGENTS.md:ro" )
 fi
 
 # Codex state dir RW
 PODMAN_ARGS+=( -v "$CODEX_CONTAINER_SANDBOX_STATE_DIR:$STATE_CONT:rw" )
+
+if [[ "$CODEX_IS_EXEC" -eq 1 ]]; then
+  PODMAN_ARGS+=( -v "$GLOBAL_AGENTS_MOUNT_HOST:$STATE_CONT/AGENTS.md:ro" )
+fi
 
 # Pi state dir RW (wrapper-managed; mounted to container ~/.pi)
 if [[ "${CODEX_CONTAINER_SANDBOX_DISABLE_PI_MOUNT:-0}" -ne 1 ]]; then
@@ -1099,7 +1236,11 @@ done
 # ----------------------------
 case "${TARGET_TOOL:-zsh}" in
   bash)
-    CONTAINER_CMD=( bash )
+    if [[ "${#TARGET_ARGS[@]}" -eq 0 ]]; then
+      CONTAINER_CMD=( bash )
+    else
+      CONTAINER_CMD=( bash "${TARGET_ARGS[@]}" )
+    fi
     ;;
   zsh)
     if [[ "${#TARGET_ARGS[@]}" -eq 0 ]]; then
@@ -1241,6 +1382,39 @@ if ! "$CODEX_CONTAINER_SANDBOX_PODMAN" image exists "$CODEX_CONTAINER_SANDBOX_IM
 fi
 
 FULL_CMD=( "$CODEX_CONTAINER_SANDBOX_PODMAN" run "${PODMAN_ARGS[@]}" "$CODEX_CONTAINER_SANDBOX_IMAGE" "${CONTAINER_CMD[@]}" )
+
+if [[ "${CODEX_CONTAINER_SANDBOX_DRY_RUN_INSTRUCTIONS:-0}" -eq 1 ]]; then
+  echo "[sandbox-agent] dry-run instructions"
+  echo "[sandbox-agent] target_tool=$TARGET_TOOL codex_is_exec=$CODEX_IS_EXEC"
+  if [[ "$CODEX_IS_EXEC" -eq 1 ]]; then
+    echo "[sandbox-agent] global_agents_source=$GLOBAL_AGENTS_MOUNT_HOST"
+  else
+    echo "[sandbox-agent] global_agents_source=(unchanged for non-codex-exec)"
+  fi
+  if [[ -n "$INSTRUCTION_PROFILE_EFFECTIVE" ]]; then
+    echo "[sandbox-agent] instruction_profile=$INSTRUCTION_PROFILE_EFFECTIVE"
+  fi
+  echo "[sandbox-agent] project_agents_mode=$PROJECT_AGENTS_MODE_EFFECTIVE"
+  if [[ -n "${PROJECT_AGENTS_FILE_EFFECTIVE:-}" ]]; then
+    echo "[sandbox-agent] project_agents_file=$PROJECT_AGENTS_FILE_EFFECTIVE"
+  fi
+  if [[ -n "$PROJECT_AGENTS_MOUNT_HOST" ]]; then
+    echo "[sandbox-agent] project_agents_mount=$PROJECT_AGENTS_MOUNT_HOST -> $WORKSPACE_ROOT_CONT/AGENTS.md"
+  else
+    echo "[sandbox-agent] project_agents_mount=(none)"
+  fi
+  if [[ -n "${PROMPTS_HOST:-}" ]]; then
+    echo "[sandbox-agent] prompts_mount=$PROMPTS_HOST -> $STATE_CONT/prompts:ro"
+  else
+    echo "[sandbox-agent] prompts_mount=(none)"
+  fi
+  if [[ -n "${SKILLS_HOST:-}" ]]; then
+    echo "[sandbox-agent] skills_mount=$SKILLS_HOST -> $STATE_CONT/skills:ro"
+  else
+    echo "[sandbox-agent] skills_mount=(none)"
+  fi
+  exit 0
+fi
 
 if [[ "$CODEX_CONTAINER_SANDBOX_DEBUG" -eq 1 || "$CODEX_CONTAINER_SANDBOX_PRINT_CODEX_CMD" -eq 1 ]]; then
   echo "[sandbox-agent] container cmd:" >&2

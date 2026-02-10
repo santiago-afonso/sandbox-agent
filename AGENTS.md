@@ -35,13 +35,13 @@ Prefer the scripted workflow over one-off Podman commands; the goal is “safe t
    - `cd ~/machine-setup/tools/sandbox-agent && ./selftest.sh`
 
 Notes:
-- Use `SANDBOX_CONTAINER_DOCUMENTATION_AND_INSTRUCTIONS.md` for “inside the container” conventions (artifacts under `{workspace}/tmp`, etc.).
-- Repo-root `AGENTS.md` is intentionally mounted read-only inside the container to avoid in-container drift of durable heuristics.
+- `SANDBOXED-AGENT-AGENTS.md` is the canonical global instruction source for `sandbox-agent codex exec` runs (mounted to container `~/.codex/AGENTS.md`).
+- Project `AGENTS.md` handling is mode-driven (`suppress|repo|replace|concat`) for codex exec.
 
 ## DNS Defaults (reliability / bypass Podman forwarder)
 
-On WSL2 + rootless Podman, we observed intermittent DNS resolution failures in short-lived non-interactive runs (e.g. `curl: (6) Could not resolve host`).
-To reduce flakiness, the wrapper pins DNS by default and **bypasses Podman DNS forwarding**:
+On WSL2 + rootless Podman, DNS behavior can vary by host/network. The wrapper now **inherits host/Podman DNS by default**.
+If needed, you can enable DNS override to pin resolvers and bypass Podman DNS forwarding:
 
 - Default DNS server order:
   - NextDNS: `45.90.28.212`, `45.90.30.212`
@@ -50,19 +50,19 @@ To reduce flakiness, the wrapper pins DNS by default and **bypasses Podman DNS f
 - Implementation: when DNS override is enabled, the wrapper generates a `resolv.conf` in its state dir and bind-mounts it to `/etc/resolv.conf:ro` inside the container. This avoids the common `169.254.x.x` DNS hop (Podman/Netavark forwarder) and avoids inheriting WSL/Tailscale DNS.
 
 Configuration (in `~/.config/sandbox-agent/config.sh`):
-- Disable override (inherit host/Podman DNS): `CODEX_CONTAINER_SANDBOX_DISABLE_DNS_OVERRIDE=1`
+- Enable override (pin resolvers): `CODEX_CONTAINER_SANDBOX_DISABLE_DNS_OVERRIDE=0`
 - Override the DNS list (in order): `CODEX_CONTAINER_SANDBOX_DNS_SERVERS=(...)`
 
 Risk/footgun: pinning public DNS may break access to corporate/internal hostnames; disable the override or provide an internal resolver if you need that.
 
 ## In-Workspace Agent Documentation
 
-This repo includes `SANDBOX_CONTAINER_DOCUMENTATION_AND_INSTRUCTIONS.md` (at repo root).
+This repo includes `SANDBOXED-AGENT-AGENTS.md` (at repo root).
 
 Rules:
-- Keep it **current** whenever you change mount behavior, tool availability, or any “where to write artifacts” convention.
-- The file must remain readable from inside the container workspace mount (i.e., it must live in the repo root and be committed).
-- The file must instruct agents to write temporary artifacts under `{workspace}/tmp` (repository-local), not OS `/tmp`.
+- Keep it **current** whenever you change mount behavior, tool availability, instruction precedence, or artifact conventions.
+- It must remain readable from the host and mountable into container `~/.codex/AGENTS.md`.
+- It must instruct agents to write temporary artifacts under `{workspace}/tmp` (repository-local), not OS `/tmp`.
 
 ## Keeping The Image Up To Date
 
@@ -77,7 +77,7 @@ This image intentionally vendors multiple fast-moving tools. To keep it maintain
 - When bumping versions:
   - Rebuild the image via `make image` (or `make install`) on a corporate network (to catch TLS/proxy issues early).
   - Run a minimal in-container smoke check: `python3 --version`, `uv --version`, `codex --version`, `playwright --version`, and any key CLIs (pdf/image/web).
-  - Update `SANDBOX_CONTAINER_DOCUMENTATION_AND_INSTRUCTIONS.md` if behavior/tooling changes.
+  - Update `SANDBOXED-AGENT-AGENTS.md` if behavior/tooling/instruction-mode changes.
 
 ## Corporate TLS Workarounds (host-specific)
 
@@ -129,7 +129,9 @@ When a new tool/skill is added on the host and you want it usable inside the con
 - 2026-01-05: Portability pattern: mount host auth/prompts/skills RO; mount `~/.local/bin`, `uv` tool dirs, and Homebrew prefix RO when needed.
 - 2026-01-05: Enterprise TLS MITM requires explicit CA injection during image build; avoid insecure npm/curl flags.
 - 2026-01-05: WSL portability: default Podman runtime to `runc` (override via env) when `crun` is flaky.
-- 2026-01-05: Keep `SANDBOX_CONTAINER_DOCUMENTATION_AND_INSTRUCTIONS.md` updated; agents write artifacts under `{workspace}/tmp`.
+- 2026-01-05: Keep sandbox global AGENTS instructions current; agents write artifacts under `{workspace}/tmp`.
+- 2026-02-10: canonical sandbox global instructions moved to `SANDBOXED-AGENT-AGENTS.md` and are mounted to container `~/.codex/AGENTS.md` for codex exec.
 - 2026-01-05: Corporate CA auto-detect only on host `PCACL-G7MKN94`; home builds must not inject WBG CA by default.
 - 2026-01-06: Portability change: no Homebrew mount; install `jq`+`yq` in-image; mount only specific `~/.local/bin/<tool>` files (not the whole dir).
 - 2026-01-06: DNS default: pin NextDNS→Cloudflare→Google and bind-mount /etc/resolv.conf to bypass Podman 169.254.x.x DNS forwarder (disable via CODEX_CONTAINER_SANDBOX_DISABLE_DNS_OVERRIDE=1).
+- 2026-02-10: DNS default changed to inherit host/Podman DNS (`CODEX_CONTAINER_SANDBOX_DISABLE_DNS_OVERRIDE=1`); enable override explicitly when needed.
