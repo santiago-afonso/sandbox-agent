@@ -293,7 +293,7 @@ into the container so `codex` doesn't prompt for login again:
 To keep prompts and skills consistent with your host setup, the wrapper can also mount:
 
 - `~/.codex/prompts` -> `$CODEX_HOME/prompts` (read-only)
-- `~/.codex/skills` -> `$CODEX_HOME/skills` (read-only)
+- `~/.agents/skills` (preferred) or `~/.codex/skills` (fallback) -> `$CODEX_HOME/skills` (read-only)
 
 Controls:
 

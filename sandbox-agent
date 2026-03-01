@@ -718,6 +718,8 @@ SKILLS_HOST=""
 if [[ "${CODEX_CONTAINER_SANDBOX_DISABLE_SKILLS_MOUNT:-0}" -ne 1 ]]; then
   if [[ -n "${CODEX_CONTAINER_SANDBOX_SKILLS_DIR:-}" ]]; then
     SKILLS_HOST="$CODEX_CONTAINER_SANDBOX_SKILLS_DIR"
+  elif [[ -d "$HOME/.agents/skills" ]]; then
+    SKILLS_HOST="$HOME/.agents/skills"
   elif [[ -d "$HOME/.codex/skills" ]]; then
     SKILLS_HOST="$HOME/.codex/skills"
   fi
