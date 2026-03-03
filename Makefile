@@ -8,6 +8,7 @@ IMAGE ?= localhost/sandbox-agent:latest
 # manifest as ECONNRESET. The npmjs.com alias often behaves better.
 NPM_REGISTRY ?= https://registry.npmjs.com/
 CODEX_NPM_PKG ?= @openai/codex@latest
+OPENCODE_VERSION ?= latest
 EXTRA_CA_CERT_PATH ?=
 MQ_VERSION ?= 0.5.9
 TYPST_VERSION ?= 0.14.2
@@ -114,6 +115,7 @@ image:
 			--build-arg INSTALL_PI_PACKAGES="$(INSTALL_PI_PACKAGES)" \
 			--build-arg NPM_REGISTRY="$(NPM_REGISTRY)" \
 			--build-arg CODEX_NPM_PKG="$(CODEX_NPM_PKG)" \
+			--build-arg OPENCODE_VERSION="$(OPENCODE_VERSION)" \
 			-t "$(IMAGE)" -f Containerfile .
 
 install: image install-wrapper

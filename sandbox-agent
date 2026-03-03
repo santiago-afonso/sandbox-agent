@@ -18,8 +18,10 @@ set -euo pipefail
 : "${CODEX_CONTAINER_SANDBOX_DISABLE_AUTH_MOUNT:=0}"
 : "${CODEX_CONTAINER_SANDBOX_PROMPTS_DIR:=}"
 : "${CODEX_CONTAINER_SANDBOX_SKILLS_DIR:=}"
+: "${CODEX_CONTAINER_SANDBOX_OPENCODE_AGENTS_DIR:=}"
 : "${CODEX_CONTAINER_SANDBOX_DISABLE_PROMPTS_MOUNT:=0}"
 : "${CODEX_CONTAINER_SANDBOX_DISABLE_SKILLS_MOUNT:=0}"
+: "${CODEX_CONTAINER_SANDBOX_DISABLE_OPENCODE_AGENTS_MOUNT:=0}"
 : "${CODEX_CONTAINER_SANDBOX_DISABLE_LOCAL_BIN_MOUNT:=0}"
 : "${CODEX_CONTAINER_SANDBOX_DISABLE_UV_TOOLS_MOUNT:=0}"
 : "${CODEX_CONTAINER_SANDBOX_DISABLE_UV_PYTHON_MOUNT:=0}"
@@ -521,7 +523,7 @@ check_tools() {
 }
 
 echo "[preflight] --- tool resolution (current shell) ---"
-check_tools codex pi python3 uv rg curl pandoc mq typst playwright chromium read-pdf markitdown ttok jq yq || true
+check_tools codex opencode pi python3 uv rg curl pandoc mq typst playwright chromium read-pdf markitdown ttok jq yq || true
 
 echo "[preflight] --- tool resolution (login shell: bash -lc) ---"
 if command -v bash >/dev/null 2>&1; then
@@ -702,6 +704,8 @@ PROMPTS_HOST=""
 if [[ "${CODEX_CONTAINER_SANDBOX_DISABLE_PROMPTS_MOUNT:-0}" -ne 1 ]]; then
   if [[ -n "${CODEX_CONTAINER_SANDBOX_PROMPTS_DIR:-}" ]]; then
     PROMPTS_HOST="$CODEX_CONTAINER_SANDBOX_PROMPTS_DIR"
+  elif [[ -d "$HOME/.agents/prompts" ]]; then
+    PROMPTS_HOST="$HOME/.agents/prompts"
   elif [[ -d "$HOME/.codex/prompts" ]]; then
     PROMPTS_HOST="$HOME/.codex/prompts"
   fi
@@ -748,6 +752,54 @@ if [[ -n "${SCRIPTS_HOST:-}" ]]; then
   fi
 fi
 
+OPENCODE_AGENTS_HOST=""
+if [[ "${CODEX_CONTAINER_SANDBOX_DISABLE_OPENCODE_AGENTS_MOUNT:-0}" -ne 1 ]]; then
+  if [[ -n "${CODEX_CONTAINER_SANDBOX_OPENCODE_AGENTS_DIR:-}" ]]; then
+    OPENCODE_AGENTS_HOST="$CODEX_CONTAINER_SANDBOX_OPENCODE_AGENTS_DIR"
+  elif [[ -d "$HOME/.config/opencode/agents" ]]; then
+    OPENCODE_AGENTS_HOST="$HOME/.config/opencode/agents"
+  elif [[ -d "$HOME/.agents/subagents/generated/opencode/agents" ]]; then
+    OPENCODE_AGENTS_HOST="$HOME/.agents/subagents/generated/opencode/agents"
+  elif [[ -d "$WORKSPACE_ROOT_HOST/.agents/subagents/generated/opencode/agents" ]]; then
+    OPENCODE_AGENTS_HOST="$WORKSPACE_ROOT_HOST/.agents/subagents/generated/opencode/agents"
+  fi
+fi
+if [[ -n "${OPENCODE_AGENTS_HOST:-}" ]]; then
+  OPENCODE_AGENTS_HOST="$(readlink -f "$OPENCODE_AGENTS_HOST" 2>/dev/null || echo "$OPENCODE_AGENTS_HOST")"
+  if [[ ! -d "$OPENCODE_AGENTS_HOST" ]] || [[ ! -r "$OPENCODE_AGENTS_HOST" ]]; then
+    echo "[sandbox-agent] opencode agents dir not readable; skipping mount: $OPENCODE_AGENTS_HOST" >&2
+    OPENCODE_AGENTS_HOST=""
+  fi
+fi
+
+# Protect .agents paths that are also reachable through the workspace RW mount.
+AGENTS_WORKSPACE_ROOT_HOST=""
+AGENTS_WORKSPACE_ROOT_CONT=""
+workspace_agents_root="$WORKSPACE_ROOT_HOST/.agents"
+if [[ -d "$workspace_agents_root" ]] && [[ -r "$workspace_agents_root" ]]; then
+  overlay_agents_workspace=0
+
+  for candidate in "${PROMPTS_HOST:-}" "${SKILLS_HOST:-}" "${OPENCODE_AGENTS_HOST:-}"; do
+    [[ -n "$candidate" ]] || continue
+    if [[ "$candidate" == "$workspace_agents_root" || "$candidate" == "$workspace_agents_root/"* ]]; then
+      overlay_agents_workspace=1
+      break
+    fi
+  done
+
+  if [[ "$overlay_agents_workspace" -eq 0 ]] && [[ -d "$HOME/.agents" ]]; then
+    home_agents_resolved="$(readlink -f "$HOME/.agents" 2>/dev/null || echo "$HOME/.agents")"
+    if [[ "$home_agents_resolved" == "$workspace_agents_root" || "$home_agents_resolved" == "$workspace_agents_root/"* ]]; then
+      overlay_agents_workspace=1
+    fi
+  fi
+
+  if [[ "$overlay_agents_workspace" -eq 1 ]]; then
+    AGENTS_WORKSPACE_ROOT_HOST="$workspace_agents_root"
+    AGENTS_WORKSPACE_ROOT_CONT="$WORKSPACE_ROOT_CONT/.agents"
+  fi
+fi
+
 # ----------------------------
 # Helper: add a mount only once (avoids duplicate -v flags)
 # ----------------------------
@@ -764,6 +816,10 @@ add_ro_mount_unique() {
   done
   SANDBOX_RO_MOUNTS+=("$p")
 }
+
+if [[ -n "${AGENTS_WORKSPACE_ROOT_HOST:-}" ]]; then
+  add_ro_mount_unique "$AGENTS_WORKSPACE_ROOT_HOST"
+fi
 
 # Host ~/.local/bin (optional). Useful for host-installed helper CLIs like read-pdf.
 #
@@ -946,8 +1002,8 @@ if [[ -n "${GIT_EMAIL:-}" ]]; then
 fi
 
 # Minimal PATH with typical user bins first.
-# Include $HOME/.opencode/bin so a host-mounted opencode binary is runnable.
-container_path="$CONTAINER_HOME/.local/bin:$CONTAINER_HOME/.opencode/bin:$CONTAINER_HOME/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+# Prefer image-installed opencode in /usr/local/bin and keep ~/.opencode/bin as fallback.
+container_path="$CONTAINER_HOME/.local/bin:$CONTAINER_HOME/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$CONTAINER_HOME/.opencode/bin"
 PODMAN_ARGS+=( --env "PATH=$container_path" )
 
 # DNS override (optional; default on).
@@ -1203,6 +1259,9 @@ fi
 if [[ -n "${SCRIPTS_HOST:-}" ]]; then
   PODMAN_ARGS+=( -v "$SCRIPTS_HOST:$STATE_CONT/scripts:ro" )
 fi
+if [[ -n "${OPENCODE_AGENTS_HOST:-}" ]]; then
+  PODMAN_ARGS+=( -v "$OPENCODE_AGENTS_HOST:$CONTAINER_HOME/.config/opencode/agents:ro" )
+fi
 
 # Host uv tools and Homebrew prefix (optional). These are mounted to their
 # original absolute paths to keep host-installed symlinks and ELF RPATHs working.
@@ -1217,6 +1276,16 @@ for p in "${SANDBOX_RO_MOUNTS[@]}"; do
   [[ -e "$p" ]] || { echo "[sandbox-agent] RO mount missing: $p" >&2; exit 2; }
   PODMAN_ARGS+=( -v "$(readlink -f "$p"):$(map_path "$p"):ro" )
 done
+
+if [[ -n "${AGENTS_WORKSPACE_ROOT_HOST:-}" ]]; then
+  for p in "${SANDBOX_RW_MOUNTS[@]}"; do
+    resolved_rw="$(readlink -f "$p" 2>/dev/null || echo "$p")"
+    if [[ "$resolved_rw" == "$AGENTS_WORKSPACE_ROOT_HOST" || "$resolved_rw" == "$AGENTS_WORKSPACE_ROOT_HOST/"* || "$AGENTS_WORKSPACE_ROOT_HOST" == "$resolved_rw/"* ]]; then
+      echo "[sandbox-agent] ERROR: refusing RW mount overlapping ~/.agents: $p" >&2
+      exit 2
+    fi
+  done
+fi
 
 for p in "${SANDBOX_RW_MOUNTS[@]}"; do
   [[ -e "$p" ]] || { echo "[sandbox-agent] RW mount missing: $p" >&2; exit 2; }
@@ -1414,6 +1483,16 @@ if [[ "${CODEX_CONTAINER_SANDBOX_DRY_RUN_INSTRUCTIONS:-0}" -eq 1 ]]; then
     echo "[sandbox-agent] skills_mount=$SKILLS_HOST -> $STATE_CONT/skills:ro"
   else
     echo "[sandbox-agent] skills_mount=(none)"
+  fi
+  if [[ -n "${OPENCODE_AGENTS_HOST:-}" ]]; then
+    echo "[sandbox-agent] opencode_agents_mount=$OPENCODE_AGENTS_HOST -> $CONTAINER_HOME/.config/opencode/agents:ro"
+  else
+    echo "[sandbox-agent] opencode_agents_mount=(none)"
+  fi
+  if [[ -n "${AGENTS_WORKSPACE_ROOT_CONT:-}" ]]; then
+    echo "[sandbox-agent] workspace_agents_overlay=$AGENTS_WORKSPACE_ROOT_HOST -> $AGENTS_WORKSPACE_ROOT_CONT:ro"
+  else
+    echo "[sandbox-agent] workspace_agents_overlay=(none)"
   fi
   exit 0
 fi
