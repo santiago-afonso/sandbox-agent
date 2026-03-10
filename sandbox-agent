@@ -122,24 +122,42 @@ fi
 
 # Allow config to set these arrays using either bash arrays or whitespace-separated strings.
 if declare -p CODEX_CONTAINER_SANDBOX_RO_MOUNTS >/dev/null 2>&1; then
-  # shellcheck disable=SC2154
-  SANDBOX_RO_MOUNTS+=("${CODEX_CONTAINER_SANDBOX_RO_MOUNTS[@]}")
+  ro_decl="$(declare -p CODEX_CONTAINER_SANDBOX_RO_MOUNTS 2>/dev/null || true)"
+  if [[ "$ro_decl" == "declare -a"* ]]; then
+    # shellcheck disable=SC2154
+    SANDBOX_RO_MOUNTS+=("${CODEX_CONTAINER_SANDBOX_RO_MOUNTS[@]}")
+  elif [[ -n "${CODEX_CONTAINER_SANDBOX_RO_MOUNTS-}" ]]; then
+    # shellcheck disable=SC2206
+    SANDBOX_RO_MOUNTS+=(${CODEX_CONTAINER_SANDBOX_RO_MOUNTS})
+  fi
 elif [[ -n "${CODEX_CONTAINER_SANDBOX_RO_MOUNTS-}" ]]; then
   # shellcheck disable=SC2206
   SANDBOX_RO_MOUNTS+=(${CODEX_CONTAINER_SANDBOX_RO_MOUNTS})
 fi
 
 if declare -p CODEX_CONTAINER_SANDBOX_RW_MOUNTS >/dev/null 2>&1; then
-  # shellcheck disable=SC2154
-  SANDBOX_RW_MOUNTS+=("${CODEX_CONTAINER_SANDBOX_RW_MOUNTS[@]}")
+  rw_decl="$(declare -p CODEX_CONTAINER_SANDBOX_RW_MOUNTS 2>/dev/null || true)"
+  if [[ "$rw_decl" == "declare -a"* ]]; then
+    # shellcheck disable=SC2154
+    SANDBOX_RW_MOUNTS+=("${CODEX_CONTAINER_SANDBOX_RW_MOUNTS[@]}")
+  elif [[ -n "${CODEX_CONTAINER_SANDBOX_RW_MOUNTS-}" ]]; then
+    # shellcheck disable=SC2206
+    SANDBOX_RW_MOUNTS+=(${CODEX_CONTAINER_SANDBOX_RW_MOUNTS})
+  fi
 elif [[ -n "${CODEX_CONTAINER_SANDBOX_RW_MOUNTS-}" ]]; then
   # shellcheck disable=SC2206
   SANDBOX_RW_MOUNTS+=(${CODEX_CONTAINER_SANDBOX_RW_MOUNTS})
 fi
 
 if declare -p CODEX_CONTAINER_SANDBOX_ENV_PASSTHROUGH >/dev/null 2>&1; then
-  # shellcheck disable=SC2154
-  SANDBOX_ENV_PASSTHROUGH+=("${CODEX_CONTAINER_SANDBOX_ENV_PASSTHROUGH[@]}")
+  env_decl="$(declare -p CODEX_CONTAINER_SANDBOX_ENV_PASSTHROUGH 2>/dev/null || true)"
+  if [[ "$env_decl" == "declare -a"* ]]; then
+    # shellcheck disable=SC2154
+    SANDBOX_ENV_PASSTHROUGH+=("${CODEX_CONTAINER_SANDBOX_ENV_PASSTHROUGH[@]}")
+  elif [[ -n "${CODEX_CONTAINER_SANDBOX_ENV_PASSTHROUGH-}" ]]; then
+    # shellcheck disable=SC2206
+    SANDBOX_ENV_PASSTHROUGH+=(${CODEX_CONTAINER_SANDBOX_ENV_PASSTHROUGH})
+  fi
 elif [[ -n "${CODEX_CONTAINER_SANDBOX_ENV_PASSTHROUGH-}" ]]; then
   # shellcheck disable=SC2206
   SANDBOX_ENV_PASSTHROUGH+=(${CODEX_CONTAINER_SANDBOX_ENV_PASSTHROUGH})
@@ -885,7 +903,9 @@ fi
 # ----------------------------
 map_path() {
   local host_path="$1"
-  host_path="$(readlink -f "$host_path")"
+  if [[ "$host_path" != /* ]]; then
+    host_path="$(readlink -f "$host_path")"
+  fi
   if [[ "$host_path" == "$HOME/"* ]]; then
     local rel="${host_path#$HOME/}"
     echo "$CONTAINER_HOME/$rel"
