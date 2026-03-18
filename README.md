@@ -32,19 +32,24 @@ If you're on a corporate network with an npm mirror, override the registry:
 make install NPM_REGISTRY=https://your-registry.example.com/
 ```
 
-If TLS is intercepted (transparent proxy / self-signed in chain), pass a corporate root CA cert:
+If TLS is intercepted (transparent proxy / self-signed in chain), pass a corporate CA file:
 
 ```bash
-make install EXTRA_CA_CERT_PATH=$HOME/wbg_root_ca_g2.cer
+make install EXTRA_CA_CERT_PATH=$HOME/.local/share/machine-setup/certs/wbg-corp-ca-bundle.pem
 ```
 
-If `EXTRA_CA_CERT_PATH` is not set, the Makefile auto-detects the WBG root cert
+The build accepts a single PEM cert, a PEM bundle, or a single DER cert.
+
+If `EXTRA_CA_CERT_PATH` is not set, the Makefile auto-detects WBG CA material
 only on the WBG laptop hostname (`PCACL-G7MKN94`) by checking:
 
-- `~/wbg_root_ca_g2.cer` (local machine file), or
-- `../../wbg_root_ca_g2.cer` (when vendored inside a parent repo, e.g. `machine-setup`)
+- `bin/wbg-ca-helper corp-bundle-path` (preferred; generated local bundle), then
+- `~/.local/share/machine-setup/certs/wbg-corp-ca-bundle.pem`, then
+- `~/wbg-cloud-root-ca.pem` or `../../wbg-cloud-root-ca.pem`, then
 
-This cert is **not** stored in the repo; it’s a local machine file and should not be committed.
+- `~/wbg_root_ca_g2.cer` or `../../wbg_root_ca_g2.cer` as a legacy fallback.
+
+These cert files are **not** stored in the repo; they are local machine files and should not be committed.
 
 You can also override bundled tool versions:
 

@@ -72,14 +72,32 @@ image:
 			if command -v runc >/dev/null 2>&1; then runtime_arg="--runtime runc"; fi; \
 		fi; \
 	fi; \
-	# Only auto-detect the WBG root cert on the IT-managed WBG laptop. \
+	# Only auto-detect WBG CA material on the IT-managed WBG laptop. \
 	# On other machines (e.g., home), do not attempt corporate CA injection unless explicitly configured. \
 	if [ -z "$$extra_ca_path" ] && [ "$$(hostname 2>/dev/null || true)" = "PCACL-G7MKN94" ]; then \
-		if [ -r "$$HOME/wbg_root_ca_g2.cer" ]; then \
+		helper_path="$(CURDIR)/../../bin/wbg-ca-helper"; \
+		if [ -x "$$helper_path" ]; then \
+			detected_path="$$(MACHINE_SETUP_DIR="$(CURDIR)/../.." "$$helper_path" corp-bundle-path 2>/dev/null || true)"; \
+			if [ -n "$$detected_path" ] && [ -r "$$detected_path" ]; then \
+				extra_ca_path="$$detected_path"; \
+				echo "Auto-detected EXTRA_CA_CERT_PATH=$$extra_ca_path" >&2; \
+			fi; \
+		fi; \
+		if [ -z "$$extra_ca_path" ] && [ -r "$$HOME/.local/share/machine-setup/certs/wbg-corp-ca-bundle.pem" ]; then \
+			extra_ca_path="$$HOME/.local/share/machine-setup/certs/wbg-corp-ca-bundle.pem"; \
+			echo "Auto-detected EXTRA_CA_CERT_PATH=$$extra_ca_path" >&2; \
+		elif [ -z "$$extra_ca_path" ] && [ -r "$$HOME/wbg-cloud-root-ca.pem" ]; then \
+			extra_ca_path="$$HOME/wbg-cloud-root-ca.pem"; \
+			echo "Auto-detected EXTRA_CA_CERT_PATH=$$extra_ca_path" >&2; \
+		elif [ -z "$$extra_ca_path" ] && [ -r "$(CURDIR)/../../wbg-cloud-root-ca.pem" ]; then \
+			# When sandbox-agent is vendored inside machine-setup, the Cloud root may live at repo root. \
+			extra_ca_path="$(CURDIR)/../../wbg-cloud-root-ca.pem"; \
+			echo "Auto-detected EXTRA_CA_CERT_PATH=$$extra_ca_path" >&2; \
+		elif [ -z "$$extra_ca_path" ] && [ -r "$$HOME/wbg_root_ca_g2.cer" ]; then \
 			extra_ca_path="$$HOME/wbg_root_ca_g2.cer"; \
 			echo "Auto-detected EXTRA_CA_CERT_PATH=$$extra_ca_path" >&2; \
-		elif [ -r "$(CURDIR)/../../wbg_root_ca_g2.cer" ]; then \
-			# When sandbox-agent is vendored inside machine-setup, the cert may live at repo root. \
+		elif [ -z "$$extra_ca_path" ] && [ -r "$(CURDIR)/../../wbg_root_ca_g2.cer" ]; then \
+			# Legacy fallback when the Cloud CA material is not available yet. \
 			extra_ca_path="$(CURDIR)/../../wbg_root_ca_g2.cer"; \
 			echo "Auto-detected EXTRA_CA_CERT_PATH=$$extra_ca_path" >&2; \
 		fi; \

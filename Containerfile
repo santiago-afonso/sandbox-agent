@@ -11,22 +11,32 @@
 # ----------------------------
 FROM docker.io/library/rust:1-bookworm AS mq_builder
 
-# Optional: add a corporate/WBG root CA for TLS interception environments.
-# Pass it as base64 bytes (either PEM or DER) via build arg EXTRA_CA_CERT_B64.
+# Optional: add a corporate/WBG CA file for TLS interception environments.
+# Pass it as base64 bytes via build arg EXTRA_CA_CERT_B64. The payload may be:
+# - a single PEM cert
+# - a PEM bundle containing multiple certs
+# - a single DER cert
 ARG EXTRA_CA_CERT_B64=""
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates git openssl \
   && rm -rf /var/lib/apt/lists/* \
   && if [ -n "${EXTRA_CA_CERT_B64}" ]; then \
       tmp=/tmp/extra-ca-cert.bin; \
+      pem_dump=/tmp/extra-ca-cert.pem; \
       echo "${EXTRA_CA_CERT_B64}" | base64 -d > "${tmp}"; \
       mkdir -p /usr/local/share/ca-certificates; \
-      if openssl x509 -in "${tmp}" -noout >/dev/null 2>&1; then \
-        cp "${tmp}" /usr/local/share/ca-certificates/extra-ca.crt; \
+      rm -f /usr/local/share/ca-certificates/extra-ca-*.crt; \
+      if openssl crl2pkcs7 -nocrl -certfile "${tmp}" 2>/dev/null | openssl pkcs7 -print_certs -out "${pem_dump}" >/dev/null 2>&1; then \
+        awk ' \
+          /-----BEGIN CERTIFICATE-----/ { in_cert=1; count+=1; file=sprintf("/usr/local/share/ca-certificates/extra-ca-%02d.crt", count) } \
+          in_cert { print > file } \
+          /-----END CERTIFICATE-----/ { if (in_cert) { close(file); in_cert=0 } } \
+          END { if (count == 0) exit 1 } \
+        ' "${pem_dump}"; \
       elif openssl x509 -inform DER -in "${tmp}" -out /usr/local/share/ca-certificates/extra-ca.crt >/dev/null 2>&1; then \
-        true; \
+        mv /usr/local/share/ca-certificates/extra-ca.crt /usr/local/share/ca-certificates/extra-ca-01.crt; \
       else \
-        echo "Failed to parse EXTRA_CA_CERT_B64 as PEM or DER x509 cert" >&2; \
+        echo "Failed to parse EXTRA_CA_CERT_B64 as PEM bundle, PEM cert, or DER x509 cert" >&2; \
         exit 2; \
       fi; \
       update-ca-certificates; \
@@ -77,19 +87,29 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fontconfig fonts-dejavu \
   && rm -rf /var/lib/apt/lists/*
 
-# Optional: add a corporate/WBG root CA for TLS interception environments.
-# Pass it as base64 bytes (either PEM or DER) via build arg EXTRA_CA_CERT_B64.
+# Optional: add a corporate/WBG CA file for TLS interception environments.
+# Pass it as base64 bytes via build arg EXTRA_CA_CERT_B64. The payload may be:
+# - a single PEM cert
+# - a PEM bundle containing multiple certs
+# - a single DER cert
 ARG EXTRA_CA_CERT_B64=""
 RUN if [ -n "${EXTRA_CA_CERT_B64}" ]; then \
       tmp=/tmp/extra-ca-cert.bin; \
+      pem_dump=/tmp/extra-ca-cert.pem; \
       echo "${EXTRA_CA_CERT_B64}" | base64 -d > "${tmp}"; \
       mkdir -p /usr/local/share/ca-certificates; \
-      if openssl x509 -in "${tmp}" -noout >/dev/null 2>&1; then \
-        cp "${tmp}" /usr/local/share/ca-certificates/extra-ca.crt; \
+      rm -f /usr/local/share/ca-certificates/extra-ca-*.crt; \
+      if openssl crl2pkcs7 -nocrl -certfile "${tmp}" 2>/dev/null | openssl pkcs7 -print_certs -out "${pem_dump}" >/dev/null 2>&1; then \
+        awk ' \
+          /-----BEGIN CERTIFICATE-----/ { in_cert=1; count+=1; file=sprintf("/usr/local/share/ca-certificates/extra-ca-%02d.crt", count) } \
+          in_cert { print > file } \
+          /-----END CERTIFICATE-----/ { if (in_cert) { close(file); in_cert=0 } } \
+          END { if (count == 0) exit 1 } \
+        ' "${pem_dump}"; \
       elif openssl x509 -inform DER -in "${tmp}" -out /usr/local/share/ca-certificates/extra-ca.crt >/dev/null 2>&1; then \
-        true; \
+        mv /usr/local/share/ca-certificates/extra-ca.crt /usr/local/share/ca-certificates/extra-ca-01.crt; \
       else \
-        echo "Failed to parse EXTRA_CA_CERT_B64 as PEM or DER x509 cert" >&2; \
+        echo "Failed to parse EXTRA_CA_CERT_B64 as PEM bundle, PEM cert, or DER x509 cert" >&2; \
         exit 2; \
       fi; \
       update-ca-certificates; \
