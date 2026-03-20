@@ -16,10 +16,8 @@ set -euo pipefail
 : "${CODEX_CONTAINER_SANDBOX_AUTH_FILE:=}"
 : "${CODEX_CONTAINER_SANDBOX_AUTH_MOUNT_MODE:=ro}"
 : "${CODEX_CONTAINER_SANDBOX_DISABLE_AUTH_MOUNT:=0}"
-: "${CODEX_CONTAINER_SANDBOX_PROMPTS_DIR:=}"
 : "${CODEX_CONTAINER_SANDBOX_SKILLS_DIR:=}"
 : "${CODEX_CONTAINER_SANDBOX_OPENCODE_AGENTS_DIR:=}"
-: "${CODEX_CONTAINER_SANDBOX_DISABLE_PROMPTS_MOUNT:=0}"
 : "${CODEX_CONTAINER_SANDBOX_DISABLE_SKILLS_MOUNT:=0}"
 : "${CODEX_CONTAINER_SANDBOX_DISABLE_OPENCODE_AGENTS_MOUNT:=0}"
 : "${CODEX_CONTAINER_SANDBOX_DISABLE_LOCAL_BIN_MOUNT:=0}"
@@ -513,11 +511,6 @@ if [[ -n "${CODEX_HOME:-}" ]]; then
   else
     echo "[preflight] skills mount: MISSING ($CODEX_HOME/skills)"
   fi
-  if [[ -d "$CODEX_HOME/prompts" ]]; then
-    echo "[preflight] prompts mount: present ($CODEX_HOME/prompts)"
-  else
-    echo "[preflight] prompts mount: MISSING ($CODEX_HOME/prompts)"
-  fi
   if [[ -d "$CODEX_HOME/scripts" ]]; then
     echo "[preflight] scripts mount: present ($CODEX_HOME/scripts)"
   else
@@ -718,24 +711,6 @@ if [[ -n "${AUTH_HOST:-}" ]]; then
   fi
 fi
 
-PROMPTS_HOST=""
-if [[ "${CODEX_CONTAINER_SANDBOX_DISABLE_PROMPTS_MOUNT:-0}" -ne 1 ]]; then
-  if [[ -n "${CODEX_CONTAINER_SANDBOX_PROMPTS_DIR:-}" ]]; then
-    PROMPTS_HOST="$CODEX_CONTAINER_SANDBOX_PROMPTS_DIR"
-  elif [[ -d "$HOME/.agents/prompts" ]]; then
-    PROMPTS_HOST="$HOME/.agents/prompts"
-  elif [[ -d "$HOME/.codex/prompts" ]]; then
-    PROMPTS_HOST="$HOME/.codex/prompts"
-  fi
-fi
-if [[ -n "${PROMPTS_HOST:-}" ]]; then
-  PROMPTS_HOST="$(readlink -f "$PROMPTS_HOST" 2>/dev/null || echo "$PROMPTS_HOST")"
-  if [[ ! -d "$PROMPTS_HOST" ]] || [[ ! -r "$PROMPTS_HOST" ]]; then
-    echo "[sandbox-agent] prompts dir not readable; skipping mount: $PROMPTS_HOST" >&2
-    PROMPTS_HOST=""
-  fi
-fi
-
 SKILLS_HOST=""
 if [[ "${CODEX_CONTAINER_SANDBOX_DISABLE_SKILLS_MOUNT:-0}" -ne 1 ]]; then
   if [[ -n "${CODEX_CONTAINER_SANDBOX_SKILLS_DIR:-}" ]]; then
@@ -797,7 +772,7 @@ workspace_agents_root="$WORKSPACE_ROOT_HOST/.agents"
 if [[ -d "$workspace_agents_root" ]] && [[ -r "$workspace_agents_root" ]]; then
   overlay_agents_workspace=0
 
-  for candidate in "${PROMPTS_HOST:-}" "${SKILLS_HOST:-}" "${OPENCODE_AGENTS_HOST:-}"; do
+  for candidate in "${SKILLS_HOST:-}" "${OPENCODE_AGENTS_HOST:-}"; do
     [[ -n "$candidate" ]] || continue
     if [[ "$candidate" == "$workspace_agents_root" || "$candidate" == "$workspace_agents_root/"* ]]; then
       overlay_agents_workspace=1
@@ -1269,10 +1244,7 @@ if [[ -n "${AUTH_HOST:-}" ]]; then
   PODMAN_ARGS+=( -v "$AUTH_HOST:$STATE_CONT/auth.json:${CODEX_CONTAINER_SANDBOX_AUTH_MOUNT_MODE}" )
 fi
 
-# Host prompts/skills (optional). Mount after CODEX_HOME dir so they overlay and remain RO.
-if [[ -n "${PROMPTS_HOST:-}" ]]; then
-  PODMAN_ARGS+=( -v "$PROMPTS_HOST:$STATE_CONT/prompts:ro" )
-fi
+# Host skills/scripts (optional). Mount after CODEX_HOME dir so they overlay and remain RO.
 if [[ -n "${SKILLS_HOST:-}" ]]; then
   PODMAN_ARGS+=( -v "$SKILLS_HOST:$STATE_CONT/skills:ro" )
 fi
@@ -1493,11 +1465,6 @@ if [[ "${CODEX_CONTAINER_SANDBOX_DRY_RUN_INSTRUCTIONS:-0}" -eq 1 ]]; then
     echo "[sandbox-agent] project_agents_mount=$PROJECT_AGENTS_MOUNT_HOST -> $WORKSPACE_ROOT_CONT/AGENTS.md"
   else
     echo "[sandbox-agent] project_agents_mount=(none)"
-  fi
-  if [[ -n "${PROMPTS_HOST:-}" ]]; then
-    echo "[sandbox-agent] prompts_mount=$PROMPTS_HOST -> $STATE_CONT/prompts:ro"
-  else
-    echo "[sandbox-agent] prompts_mount=(none)"
   fi
   if [[ -n "${SKILLS_HOST:-}" ]]; then
     echo "[sandbox-agent] skills_mount=$SKILLS_HOST -> $STATE_CONT/skills:ro"

@@ -99,7 +99,8 @@ When a new tool/skill is added on the host and you want it usable inside the con
 
 2) **Mount host config safely (read-only by default)**
    - Mount host `~/.codex/auth.json` into container `$CODEX_HOME/auth.json` as **read-only** by default.
-   - Mount host `~/.codex/prompts` and `~/.agents/skills` (fallback `~/.codex/skills`) into container `$CODEX_HOME/prompts|skills` as **read-only** overlays.
+   - Mount host `~/.agents/skills` (fallback `~/.codex/skills`) into container `$CODEX_HOME/skills` as **read-only**.
+   - Reuse host Pi prompt templates through the existing read-only `~/.pi/agent` mount rather than a separate Codex prompt overlay.
    - Provide env toggles to disable any mount (so “clean room” runs are easy).
 
 3) **Make host CLIs resolve inside the container**

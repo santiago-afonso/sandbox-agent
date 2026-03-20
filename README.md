@@ -310,21 +310,22 @@ into the container so `codex` doesn't prompt for login again:
 - Disable mounting entirely with `CODEX_CONTAINER_SANDBOX_DISABLE_AUTH_MOUNT=1`.
 - Control mount mode (default `ro`) with `CODEX_CONTAINER_SANDBOX_AUTH_MOUNT_MODE=ro|rw`.
 
-### Reuse host prompts and skills (optional)
+### Reuse host skills and Pi customizations (optional)
 
-To keep prompts and skills consistent with your host setup, the wrapper can also mount:
+To keep Codex skills consistent with your host setup, the wrapper can mount:
 
-- `~/.agents/prompts` (preferred) or `~/.codex/prompts` (fallback) -> `$CODEX_HOME/prompts` (read-only)
 - `~/.agents/skills` (preferred) or `~/.codex/skills` (fallback) -> `$CODEX_HOME/skills` (read-only)
 
 Controls:
 
 - Override paths:
-  - `CODEX_CONTAINER_SANDBOX_PROMPTS_DIR=/path/to/prompts`
   - `CODEX_CONTAINER_SANDBOX_SKILLS_DIR=/path/to/skills`
 - Disable:
-  - `CODEX_CONTAINER_SANDBOX_DISABLE_PROMPTS_MOUNT=1`
   - `CODEX_CONTAINER_SANDBOX_DISABLE_SKILLS_MOUNT=1`
+
+Pi prompt templates ride through the existing read-only `~/.pi/agent` mount. When `setup.sh`
+wires `~/.pi/agent/prompts` to `.agents/generated/pi/prompts`, the container sees the same
+templates at `~/.pi-host/agent/prompts` without any separate Codex prompt mount.
 
 ### Reuse host OpenCode agents (optional)
 
