@@ -6,59 +6,6 @@
 # while keeping host exposure bounded via the wrapper mounts.
 #
 
-# ----------------------------
-# Builder: mq (mqlang.org)
-# ----------------------------
-FROM docker.io/library/rust:1-bookworm AS mq_builder
-
-# Optional: add a corporate/WBG CA file for TLS interception environments.
-# Pass it as base64 bytes via build arg EXTRA_CA_CERT_B64. The payload may be:
-# - a single PEM cert
-# - a PEM bundle containing multiple certs
-# - a single DER cert
-ARG EXTRA_CA_CERT_B64=""
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates git openssl \
-  && rm -rf /var/lib/apt/lists/* \
-  && if [ -n "${EXTRA_CA_CERT_B64}" ]; then \
-      tmp=/tmp/extra-ca-cert.bin; \
-      pem_dump=/tmp/extra-ca-cert.pem; \
-      echo "${EXTRA_CA_CERT_B64}" | base64 -d > "${tmp}"; \
-      mkdir -p /usr/local/share/ca-certificates; \
-      rm -f /usr/local/share/ca-certificates/extra-ca-*.crt; \
-      if openssl crl2pkcs7 -nocrl -certfile "${tmp}" 2>/dev/null | openssl pkcs7 -print_certs -out "${pem_dump}" >/dev/null 2>&1; then \
-        awk ' \
-          /-----BEGIN CERTIFICATE-----/ { in_cert=1; count+=1; file=sprintf("/usr/local/share/ca-certificates/extra-ca-%02d.crt", count) } \
-          in_cert { print > file } \
-          /-----END CERTIFICATE-----/ { if (in_cert) { close(file); in_cert=0 } } \
-          END { if (count == 0) exit 1 } \
-        ' "${pem_dump}"; \
-      elif openssl x509 -inform DER -in "${tmp}" -out /usr/local/share/ca-certificates/extra-ca.crt >/dev/null 2>&1; then \
-        mv /usr/local/share/ca-certificates/extra-ca.crt /usr/local/share/ca-certificates/extra-ca-01.crt; \
-      else \
-        echo "Failed to parse EXTRA_CA_CERT_B64 as PEM bundle, PEM cert, or DER x509 cert" >&2; \
-        exit 2; \
-      fi; \
-      update-ca-certificates; \
-    fi
-
-# Make the system CA bundle the default for tooling used during the build.
-# This keeps cargo/git reliable in TLS interception environments when the
-# corporate root has been added to the OS certificate store above.
-ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
-ENV SSL_CERT_DIR=/etc/ssl/certs
-ENV GIT_SSL_CAINFO=/etc/ssl/certs/ca-certificates.crt
-ENV CARGO_HTTP_CAINFO=/etc/ssl/certs/ca-certificates.crt
-
-ARG MQ_VERSION="0.5.9"
-RUN git clone --depth 1 --branch "v${MQ_VERSION}" https://github.com/harehare/mq.git /src/mq
-WORKDIR /src/mq
-RUN cargo install --locked --path crates/mq-run --root /opt/mq
-RUN strip /opt/mq/bin/mq >/dev/null 2>&1 || true
-
-# ----------------------------
-# Runtime
-# ----------------------------
 FROM docker.io/library/node:22-bookworm-slim
 
 # Provide a predictable HOME early (and make it writable for arbitrary UIDs).
@@ -124,6 +71,25 @@ ENV REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 ENV CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 ENV GIT_SSL_CAINFO=/etc/ssl/certs/ca-certificates.crt
 ENV PIP_CERT=/etc/ssl/certs/ca-certificates.crt
+# npm/Node works more reliably when we point NODE_EXTRA_CA_CERTS at the raw
+# injected corporate bundle/cert instead of overriding npm's cafile.
+ENV CODEX_NODE_EXTRA_CA_CERT_PATH=/usr/local/share/ca-certificates/extra-ca.crt
+
+# Install mq from the upstream GitHub release instead of compiling from source.
+# GitHub works with the injected CA in corporate TLS interception environments,
+# while crates.io has proven less reliable on the WBG network.
+ARG MQ_VERSION="0.5.9"
+ARG MQ_TARGET="x86_64-unknown-linux-gnu"
+RUN set -eux; \
+    asset="mq-${MQ_TARGET}"; \
+    base_url="https://github.com/harehare/mq/releases/download/v${MQ_VERSION}"; \
+    tmpdir="$(mktemp -d)"; \
+    mkdir -p "${tmpdir}/${asset}"; \
+    curl -fsSL "${base_url}/checksums.txt" -o "${tmpdir}/checksums.txt"; \
+    curl -fsSL "${base_url}/${asset}" -o "${tmpdir}/${asset}/${asset}"; \
+    (cd "${tmpdir}" && grep -F "  ${asset}/${asset}" checksums.txt | sha256sum -c -); \
+    install -m 0755 "${tmpdir}/${asset}/${asset}" /usr/local/bin/mq; \
+    rm -rf "${tmpdir}"
 
 # WBG TLS interception can present certificates without Authority Key Identifier,
 # which breaks Python 3.14+ default HTTPS verification (OpenSSL strict mode).
@@ -165,9 +131,6 @@ if disable_strict in {"1", "true", "yes", "on"}:
         ssl._create_default_https_context = create_default_https_context
         ssl._create_stdlib_context = create_default_https_context
 PY
-
-# Bring in mq from the builder stage.
-COPY --from=mq_builder /opt/mq/bin/mq /usr/local/bin/mq
 
 # Install uv as a standalone binary (not via system Python/pip), then install a
 # uv-managed Python and set it as the default.
@@ -227,7 +190,8 @@ ENV NODE_PATH=/usr/local/lib/node_modules
 # affect npm behavior in these images.
 ARG NPM_REGISTRY="https://registry.npmjs.com/"
 ARG CODEX_NPM_PKG="@openai/codex@latest"
-RUN printf "registry=%s\ncafile=/etc/ssl/certs/ca-certificates.crt\n" "${NPM_REGISTRY}" > /usr/local/etc/npmrc \
+RUN if [ -s "${CODEX_NODE_EXTRA_CA_CERT_PATH}" ]; then export NODE_EXTRA_CA_CERTS="${CODEX_NODE_EXTRA_CA_CERT_PATH}"; fi \
+  && printf "registry=%s\n" "${NPM_REGISTRY}" > /usr/local/etc/npmrc \
   && npm config set fetch-retries 5 \
   && npm config set fetch-retry-mintimeout 20000 \
   && npm config set fetch-retry-maxtimeout 120000 \
@@ -251,11 +215,13 @@ RUN if [ "${OPENCODE_VERSION}" = "latest" ]; then \
 # wrapper, you can mount host ~/.pi into container ~/.pi so sessions, auth, and
 # extensions persist on the host.
 ARG PI_NPM_PKG="@mariozechner/pi-coding-agent@latest"
-RUN npm install -g "${PI_NPM_PKG}"
+RUN if [ -s "${CODEX_NODE_EXTRA_CA_CERT_PATH}" ]; then export NODE_EXTRA_CA_CERTS="${CODEX_NODE_EXTRA_CA_CERT_PATH}"; fi \
+  && npm install -g "${PI_NPM_PKG}"
 
 # Install GitHub Copilot CLI (prerelease).
 ARG COPILOT_NPM_PKG="@github/copilot@prerelease"
-RUN npm install -g "${COPILOT_NPM_PKG}"
+RUN if [ -s "${CODEX_NODE_EXTRA_CA_CERT_PATH}" ]; then export NODE_EXTRA_CA_CERTS="${CODEX_NODE_EXTRA_CA_CERT_PATH}"; fi \
+  && npm install -g "${COPILOT_NPM_PKG}"
 
 # Playwright + headless Chromium (for JS/client-rendered pages).
 #
@@ -269,7 +235,8 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN apt-get update && apt-get install -y --no-install-recommends \
     chromium \
   && rm -rf /var/lib/apt/lists/*
-RUN npm install -g "${PLAYWRIGHT_NPM_PKG}" \
+RUN if [ -s "${CODEX_NODE_EXTRA_CA_CERT_PATH}" ]; then export NODE_EXTRA_CA_CERTS="${CODEX_NODE_EXTRA_CA_CERT_PATH}"; fi \
+  && npm install -g "${PLAYWRIGHT_NPM_PKG}" \
   && if [ "${INSTALL_PLAYWRIGHT_BROWSERS}" = "1" ]; then \
        playwright install chromium; \
      fi

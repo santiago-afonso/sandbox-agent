@@ -11,6 +11,8 @@ CODEX_NPM_PKG ?= @openai/codex@latest
 OPENCODE_VERSION ?= latest
 EXTRA_CA_CERT_PATH ?=
 MQ_VERSION ?= 0.5.9
+# Pull the matching prebuilt mq release asset instead of compiling from source.
+MQ_TARGET ?= x86_64-unknown-linux-gnu
 TYPST_VERSION ?= 0.14.2
 TYPST_TARGET ?= x86_64-unknown-linux-musl
 UV_VERSION ?= 0.9.22
@@ -119,6 +121,7 @@ image:
 		$$extra_ca_arg \
 		$$tls_workaround_arg \
 		--build-arg MQ_VERSION="$(MQ_VERSION)" \
+		--build-arg MQ_TARGET="$(MQ_TARGET)" \
 		--build-arg TYPST_VERSION="$(TYPST_VERSION)" \
 		--build-arg TYPST_TARGET="$(TYPST_TARGET)" \
 		--build-arg UV_VERSION="$(UV_VERSION)" \

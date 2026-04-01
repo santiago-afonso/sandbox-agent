@@ -46,7 +46,6 @@ only on the WBG laptop hostname (`PCACL-G7MKN94`) by checking:
 - `bin/wbg-ca-helper corp-bundle-path` (preferred; generated local bundle), then
 - `~/.local/share/machine-setup/certs/wbg-corp-ca-bundle.pem`, then
 - `~/wbg-cloud-root-ca.pem` or `../../wbg-cloud-root-ca.pem`, then
-
 - `~/wbg_root_ca_g2.cer` or `../../wbg_root_ca_g2.cer` as a legacy fallback.
 
 These cert files are **not** stored in the repo; they are local machine files and should not be committed.
@@ -55,8 +54,13 @@ You can also override bundled tool versions:
 
 ```bash
 make install CODEX_NPM_PKG=@openai/codex@latest OPENCODE_VERSION=latest \
-  MQ_VERSION=0.5.9 TYPST_VERSION=0.14.2 TYPST_TARGET=x86_64-unknown-linux-musl
+  MQ_VERSION=0.5.9 MQ_TARGET=x86_64-unknown-linux-gnu \
+  TYPST_VERSION=0.14.2 TYPST_TARGET=x86_64-unknown-linux-musl
 ```
+
+`mq` is installed from its GitHub release assets and verified against the
+upstream `checksums.txt`. If you override `MQ_TARGET`, make sure the selected
+`MQ_VERSION` publishes a matching release artifact.
 
 Override the default uv-managed Python version:
 
