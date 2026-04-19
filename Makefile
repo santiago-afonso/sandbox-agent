@@ -23,8 +23,8 @@ INSTALL_PLAYWRIGHT_BROWSERS ?= 1
 PLAYWRIGHT_NPM_PKG ?= playwright@latest
 # NOTE: We intentionally pin ticket/tk to a tag/commit + SHA256 so builds fail
 # loudly if upstream changes (rather than silently pulling a different script).
-TICKET_URL ?= https://raw.githubusercontent.com/wedow/ticket/v0.3.1/ticket
-TICKET_SHA256 ?= ebe5b4af28525fd336b818b2ef0c681396af2023a24b6850c60df3be1764d7ab
+TICKET_URL ?= https://raw.githubusercontent.com/wedow/ticket/v0.3.2/ticket
+TICKET_SHA256 ?= 408f2c113ecc3bc071507593a78386f1b4cc743be6491c9e9f2627efd4d9902b
 
 # Pi (pi-mono coding-agent)
 PI_NPM_PKG ?= @mariozechner/pi-coding-agent@latest

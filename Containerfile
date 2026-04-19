@@ -244,8 +244,8 @@ RUN if [ -s "${CODEX_NODE_EXTRA_CA_CERT_PATH}" ]; then export NODE_EXTRA_CA_CERT
 # Install tk/ticket (minimal git-backed ticket tracker).
 # We pin to an expected SHA256 so upstream changes fail loudly and require an
 # intentional update here.
-ARG TICKET_URL="https://raw.githubusercontent.com/wedow/ticket/v0.3.1/ticket"
-ARG TICKET_SHA256="ebe5b4af28525fd336b818b2ef0c681396af2023a24b6850c60df3be1764d7ab"
+ARG TICKET_URL="https://raw.githubusercontent.com/wedow/ticket/v0.3.2/ticket"
+ARG TICKET_SHA256="408f2c113ecc3bc071507593a78386f1b4cc743be6491c9e9f2627efd4d9902b"
 RUN curl -fsSL "${TICKET_URL}" -o /usr/local/bin/ticket \
   && if [ -n "${TICKET_SHA256}" ]; then echo "${TICKET_SHA256}  /usr/local/bin/ticket" | sha256sum -c -; fi \
   && chmod 0755 /usr/local/bin/ticket \
