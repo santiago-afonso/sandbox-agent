@@ -209,12 +209,12 @@ RUN if [ "${OPENCODE_VERSION}" = "latest" ]; then \
     fi \
   && install -m 0755 "$HOME/.opencode/bin/opencode" /usr/local/bin/opencode
 
-# Pi (pi-mono coding-agent)
+# Pi coding-agent
 #
 # Pi stores state under ~/.pi by default. When running via the sandbox-agent
 # wrapper, you can mount host ~/.pi into container ~/.pi so sessions, auth, and
 # extensions persist on the host.
-ARG PI_NPM_PKG="@mariozechner/pi-coding-agent@latest"
+ARG PI_NPM_PKG="@earendil-works/pi-coding-agent@latest"
 RUN if [ -s "${CODEX_NODE_EXTRA_CA_CERT_PATH}" ]; then export NODE_EXTRA_CA_CERTS="${CODEX_NODE_EXTRA_CA_CERT_PATH}"; fi \
   && npm install -g "${PI_NPM_PKG}"
 

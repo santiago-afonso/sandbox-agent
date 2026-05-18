@@ -26,8 +26,8 @@ PLAYWRIGHT_NPM_PKG ?= playwright@latest
 TICKET_URL ?= https://raw.githubusercontent.com/wedow/ticket/v0.3.2/ticket
 TICKET_SHA256 ?= 408f2c113ecc3bc071507593a78386f1b4cc743be6491c9e9f2627efd4d9902b
 
-# Pi (pi-mono coding-agent)
-PI_NPM_PKG ?= @mariozechner/pi-coding-agent@latest
+# Pi coding-agent
+PI_NPM_PKG ?= @earendil-works/pi-coding-agent@latest
 INSTALL_PI_PACKAGES ?= 1
 
 PREFIX ?= $(HOME)/.local
