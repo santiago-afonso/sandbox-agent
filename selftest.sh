@@ -75,12 +75,6 @@ HOST_SENTINEL_CONTENT="host_sentinel_$(date +%s)_$RANDOM"
 printf '%s\n' "$HOST_SENTINEL_CONTENT" >"$HOST_SENTINEL"
 INSTRUCTION_TEST_SCRIPT="$ROOT/scripts/test_instruction_flags.sh"
 CANONICAL_GLOBAL_AGENTS="$ROOT/SANDBOXED-AGENT-AGENTS.md"
-OPENCODE_AGENTS_HOST=""
-if [[ -d "$HOME/.config/opencode/agents" ]]; then
-  OPENCODE_AGENTS_HOST="$(readlink -f "$HOME/.config/opencode/agents" 2>/dev/null || echo "$HOME/.config/opencode/agents")"
-elif [[ -d "$HOME/.agents/subagents/generated/opencode/agents" ]]; then
-  OPENCODE_AGENTS_HOST="$(readlink -f "$HOME/.agents/subagents/generated/opencode/agents" 2>/dev/null || echo "$HOME/.agents/subagents/generated/opencode/agents")"
-fi
 
 pushd "$ROOT" >/dev/null
 
@@ -107,16 +101,14 @@ chromium --version >/dev/null
 EOF
 echo "[selftest] OK: playwright/chromium present"
 
-echo "[selftest] (3/7) Check Codex + OpenCode CLIs are usable..."
+echo "[selftest] (3/7) Check Codex CLI is usable..."
 "$WRAPPER" --image "$IMAGE" --shell <<'EOF'
 set -euo pipefail
 need_cmd() { command -v "$1" >/dev/null 2>&1 || { echo "[in-container] missing: $1" >&2; exit 1; }; }
 need_cmd codex
-need_cmd opencode
 codex --version >/dev/null
-opencode --version >/dev/null
 EOF
-echo "[selftest] OK: codex/opencode present"
+echo "[selftest] OK: codex present"
 
 echo "[selftest] (4/7) Check host filesystem isolation (no implicit access)..."
 "$WRAPPER" --image "$IMAGE" --shell <<EOF
@@ -147,26 +139,7 @@ test -f "$TMP_HOST_DIR/wrote_from_container.txt"
 test "$(cat "$TMP_HOST_DIR/wrote_from_container.txt")" = "wrote_from_container"
 echo "[selftest] OK: RW mount works as expected"
 
-echo "[selftest] (6/7) Check OpenCode agents mount wiring (read-only)..."
-if [[ -n "${OPENCODE_AGENTS_HOST:-}" ]]; then
-  dry_run_output="$("$WRAPPER" --image "$IMAGE" --dry-run-instructions opencode agent list)"
-  expected_mount_line="[sandbox-agent] opencode_agents_mount=${OPENCODE_AGENTS_HOST} -> /home/codex/.config/opencode/agents:ro"
-  grep -Fq "$expected_mount_line" <<<"$dry_run_output" || die "dry-run missing expected OpenCode agents mount line"
-  "$WRAPPER" --image "$IMAGE" --shell <<'EOF'
-set -euo pipefail
-test -d "$HOME/.config/opencode/agents"
-probe="$HOME/.config/opencode/agents/.sandbox_agent_ro_probe_$$"
-if echo "probe" >"$probe" 2>/dev/null; then
-  rm -f "$probe" || true
-  echo "[in-container] expected read-only OpenCode agents mount; write succeeded" >&2
-  exit 1
-fi
-EOF
-  echo "[selftest] OK: OpenCode agents mount wired read-only"
-else
-  echo "[selftest] SKIP: no host OpenCode agents dir found (~/.config/opencode/agents or ~/.agents/subagents/generated/opencode/agents)"
-fi
-
+echo "[selftest] (6/7) Check ~/.agents RW-overlap guard..."
 if [[ -d "$HOME/.agents" ]]; then
   set +e
   rw_guard_output="$("$WRAPPER" --image "$IMAGE" --rw "$HOME/.agents" --shell <<'EOF' 2>&1

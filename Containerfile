@@ -198,17 +198,6 @@ RUN if [ -s "${CODEX_NODE_EXTRA_CA_CERT_PATH}" ]; then export NODE_EXTRA_CA_CERT
   && npm config set fetch-timeout 600000 \
   && npm install -g "${CODEX_NPM_PKG}"
 
-# Install OpenCode CLI.
-# Default policy is "latest", but callers can pin a specific version via build arg.
-ARG OPENCODE_INSTALL_SCRIPT_URL="https://opencode.ai/install"
-ARG OPENCODE_VERSION="latest"
-RUN if [ "${OPENCODE_VERSION}" = "latest" ]; then \
-      curl -fsSL "${OPENCODE_INSTALL_SCRIPT_URL}" | bash -s -- --no-modify-path; \
-    else \
-      curl -fsSL "${OPENCODE_INSTALL_SCRIPT_URL}" | bash -s -- --version "${OPENCODE_VERSION}" --no-modify-path; \
-    fi \
-  && install -m 0755 "$HOME/.opencode/bin/opencode" /usr/local/bin/opencode
-
 # Pi coding-agent
 #
 # Pi stores state under ~/.pi by default. When running via the sandbox-agent

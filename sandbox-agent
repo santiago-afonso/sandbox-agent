@@ -17,9 +17,7 @@ set -euo pipefail
 : "${CODEX_CONTAINER_SANDBOX_AUTH_MOUNT_MODE:=ro}"
 : "${CODEX_CONTAINER_SANDBOX_DISABLE_AUTH_MOUNT:=0}"
 : "${CODEX_CONTAINER_SANDBOX_SKILLS_DIR:=}"
-: "${CODEX_CONTAINER_SANDBOX_OPENCODE_AGENTS_DIR:=}"
 : "${CODEX_CONTAINER_SANDBOX_DISABLE_SKILLS_MOUNT:=0}"
-: "${CODEX_CONTAINER_SANDBOX_DISABLE_OPENCODE_AGENTS_MOUNT:=0}"
 : "${CODEX_CONTAINER_SANDBOX_DISABLE_LOCAL_BIN_MOUNT:=0}"
 : "${CODEX_CONTAINER_SANDBOX_DISABLE_UV_TOOLS_MOUNT:=0}"
 : "${CODEX_CONTAINER_SANDBOX_DISABLE_UV_PYTHON_MOUNT:=0}"
@@ -224,7 +222,7 @@ OPTIONS
   -h, --help       Show this help
 
 NOTES
-  - Allowed tools: codex, copilot, opencode, pi, zsh, bash
+  - Allowed tools: codex, copilot, pi, zsh, bash
   - For codex runs, injects: --dangerously-bypass-approvals-and-sandbox and --sandbox danger-full-access (unless disabled).
   - For debugging only, you can disable this injection by setting CODEX_CONTAINER_SANDBOX_DISABLE_YOLO_INJECTION=1.
   - Networking is enabled (no egress restrictions).
@@ -267,7 +265,7 @@ if [[ "$RUN_SHELL" -eq 1 ]]; then
   TARGET_TOOL="bash"
 elif [[ "${#RAW_ARGS[@]}" -ge 1 ]]; then
   case "${RAW_ARGS[0]}" in
-    codex|copilot|opencode|pi|zsh|bash)
+    codex|copilot|pi|zsh|bash)
       TARGET_TOOL="${RAW_ARGS[0]}"
       TARGET_ARGS=( "${RAW_ARGS[@]:1}" )
       ;;
@@ -534,7 +532,7 @@ check_tools() {
 }
 
 echo "[preflight] --- tool resolution (current shell) ---"
-check_tools codex opencode pi python3 uv rg curl pandoc mq typst playwright chromium read-pdf markitdown ttok jq yq || true
+check_tools codex pi python3 uv rg curl pandoc mq typst playwright chromium read-pdf markitdown ttok jq yq || true
 
 echo "[preflight] --- tool resolution (login shell: bash -lc) ---"
 if command -v bash >/dev/null 2>&1; then
@@ -745,26 +743,6 @@ if [[ -n "${SCRIPTS_HOST:-}" ]]; then
   fi
 fi
 
-OPENCODE_AGENTS_HOST=""
-if [[ "${CODEX_CONTAINER_SANDBOX_DISABLE_OPENCODE_AGENTS_MOUNT:-0}" -ne 1 ]]; then
-  if [[ -n "${CODEX_CONTAINER_SANDBOX_OPENCODE_AGENTS_DIR:-}" ]]; then
-    OPENCODE_AGENTS_HOST="$CODEX_CONTAINER_SANDBOX_OPENCODE_AGENTS_DIR"
-  elif [[ -d "$HOME/.config/opencode/agents" ]]; then
-    OPENCODE_AGENTS_HOST="$HOME/.config/opencode/agents"
-  elif [[ -d "$HOME/.agents/subagents/generated/opencode/agents" ]]; then
-    OPENCODE_AGENTS_HOST="$HOME/.agents/subagents/generated/opencode/agents"
-  elif [[ -d "$WORKSPACE_ROOT_HOST/.agents/subagents/generated/opencode/agents" ]]; then
-    OPENCODE_AGENTS_HOST="$WORKSPACE_ROOT_HOST/.agents/subagents/generated/opencode/agents"
-  fi
-fi
-if [[ -n "${OPENCODE_AGENTS_HOST:-}" ]]; then
-  OPENCODE_AGENTS_HOST="$(readlink -f "$OPENCODE_AGENTS_HOST" 2>/dev/null || echo "$OPENCODE_AGENTS_HOST")"
-  if [[ ! -d "$OPENCODE_AGENTS_HOST" ]] || [[ ! -r "$OPENCODE_AGENTS_HOST" ]]; then
-    echo "[sandbox-agent] opencode agents dir not readable; skipping mount: $OPENCODE_AGENTS_HOST" >&2
-    OPENCODE_AGENTS_HOST=""
-  fi
-fi
-
 # Protect .agents paths that are also reachable through the workspace RW mount.
 AGENTS_WORKSPACE_ROOT_HOST=""
 AGENTS_WORKSPACE_ROOT_CONT=""
@@ -772,7 +750,7 @@ workspace_agents_root="$WORKSPACE_ROOT_HOST/.agents"
 if [[ -d "$workspace_agents_root" ]] && [[ -r "$workspace_agents_root" ]]; then
   overlay_agents_workspace=0
 
-  for candidate in "${SKILLS_HOST:-}" "${OPENCODE_AGENTS_HOST:-}"; do
+  for candidate in "${SKILLS_HOST:-}"; do
     [[ -n "$candidate" ]] || continue
     if [[ "$candidate" == "$workspace_agents_root" || "$candidate" == "$workspace_agents_root/"* ]]; then
       overlay_agents_workspace=1
@@ -839,11 +817,6 @@ if [[ "${CODEX_CONTAINER_SANDBOX_DISABLE_LOCAL_BIN_MOUNT:-0}" -ne 1 ]]; then
       fi
     done
   fi
-fi
-
-# Host opencode binary (optional). opencode is often installed to ~/.opencode/bin/opencode.
-if [[ -x "$HOME/.opencode/bin/opencode" ]]; then
-  add_ro_mount_unique "$HOME/.opencode/bin/opencode"
 fi
 
 # Host uv tools (optional). Needed when host CLIs in ~/.local/bin are symlinks to
@@ -997,8 +970,8 @@ if [[ -n "${GIT_EMAIL:-}" ]]; then
 fi
 
 # Minimal PATH with typical user bins first.
-# Prefer image-installed opencode in /usr/local/bin and keep ~/.opencode/bin as fallback.
-container_path="$CONTAINER_HOME/.local/bin:$CONTAINER_HOME/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$CONTAINER_HOME/.opencode/bin"
+# Prefer image-installed tools in /usr/local/bin, with wrapper-managed user bins first.
+container_path="$CONTAINER_HOME/.local/bin:$CONTAINER_HOME/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 PODMAN_ARGS+=( --env "PATH=$container_path" )
 
 # DNS override (optional; default on).
@@ -1251,10 +1224,6 @@ fi
 if [[ -n "${SCRIPTS_HOST:-}" ]]; then
   PODMAN_ARGS+=( -v "$SCRIPTS_HOST:$STATE_CONT/scripts:ro" )
 fi
-if [[ -n "${OPENCODE_AGENTS_HOST:-}" ]]; then
-  PODMAN_ARGS+=( -v "$OPENCODE_AGENTS_HOST:$CONTAINER_HOME/.config/opencode/agents:ro" )
-fi
-
 # Host uv tools and Homebrew prefix (optional). These are mounted to their
 # original absolute paths to keep host-installed symlinks and ELF RPATHs working.
 if [[ -n "${UV_TOOLS_HOST:-}" ]]; then
@@ -1317,9 +1286,6 @@ case "${TARGET_TOOL:-zsh}" in
     ;;
   copilot)
     CONTAINER_CMD=( copilot "${TARGET_ARGS[@]}" )
-    ;;
-  opencode)
-    CONTAINER_CMD=( opencode "${TARGET_ARGS[@]}" )
     ;;
   codex)
     CONTAINER_CMD=( codex )
@@ -1417,7 +1383,7 @@ case "${TARGET_TOOL:-zsh}" in
     ;;
   *)
     echo "[sandbox-agent] unsupported tool: ${TARGET_TOOL}" >&2
-    echo "[sandbox-agent] allowed tools: codex, copilot, opencode, zsh, bash" >&2
+    echo "[sandbox-agent] allowed tools: codex, copilot, pi, zsh, bash" >&2
     exit 2
     ;;
 esac
@@ -1470,11 +1436,6 @@ if [[ "${CODEX_CONTAINER_SANDBOX_DRY_RUN_INSTRUCTIONS:-0}" -eq 1 ]]; then
     echo "[sandbox-agent] skills_mount=$SKILLS_HOST -> $STATE_CONT/skills:ro"
   else
     echo "[sandbox-agent] skills_mount=(none)"
-  fi
-  if [[ -n "${OPENCODE_AGENTS_HOST:-}" ]]; then
-    echo "[sandbox-agent] opencode_agents_mount=$OPENCODE_AGENTS_HOST -> $CONTAINER_HOME/.config/opencode/agents:ro"
-  else
-    echo "[sandbox-agent] opencode_agents_mount=(none)"
   fi
   if [[ -n "${AGENTS_WORKSPACE_ROOT_CONT:-}" ]]; then
     echo "[sandbox-agent] workspace_agents_overlay=$AGENTS_WORKSPACE_ROOT_HOST -> $AGENTS_WORKSPACE_ROOT_CONT:ro"

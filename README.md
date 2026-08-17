@@ -1,6 +1,6 @@
 # sandbox-agent
 
-A Podman wrapper that runs agent CLIs (primarily `codex`, but also `copilot`, `opencode`, and `pi`) inside a container.
+A Podman wrapper that runs agent CLIs (primarily `codex`, but also `copilot` and `pi`) inside a container.
 
 For `codex`, it always uses:
 
@@ -53,7 +53,7 @@ These cert files are **not** stored in the repo; they are local machine files an
 You can also override bundled tool versions:
 
 ```bash
-make install CODEX_NPM_PKG=@openai/codex@latest OPENCODE_VERSION=latest \
+make install CODEX_NPM_PKG=@openai/codex@latest \
   MQ_VERSION=0.5.9 MQ_TARGET=x86_64-unknown-linux-gnu \
   TYPST_VERSION=0.14.2 TYPST_TARGET=x86_64-unknown-linux-musl
 ```
@@ -86,7 +86,6 @@ make install INSTALL_PLAYWRIGHT_BROWSERS=0
 install -m 0755 ./sandbox-agent ~/.local/bin/sandbox-agent
 install -m 0755 ./sandbox-agent-codex ~/.local/bin/sandbox-agent-codex
 install -m 0755 ./sandbox-agent-copilot ~/.local/bin/sandbox-agent-copilot
-install -m 0755 ./sandbox-agent-opencode ~/.local/bin/sandbox-agent-opencode
 install -m 0755 ./sandbox-agent-pi ~/.local/bin/sandbox-agent-pi
 ```
 
@@ -133,10 +132,6 @@ CODEX_CONTAINER_SANDBOX_RW_MOUNTS=(
 #   GEMINI_API_KEY
 #   GOOGLE_API_KEY
 # )
-#
-# Optional: override/disable host OpenCode agents mount.
-# CODEX_CONTAINER_SANDBOX_OPENCODE_AGENTS_DIR="$HOME/.config/opencode/agents"
-# CODEX_CONTAINER_SANDBOX_DISABLE_OPENCODE_AGENTS_MOUNT=1
 ```
 
 ## Usage
@@ -151,12 +146,6 @@ sandbox-agent
 
 ```bash
 sandbox-agent codex exec "Summarize the repo"
-```
-
-### OpenCode (full network)
-
-```bash
-sandbox-agent opencode agent list
 ```
 
 ### Instruction-source dry run (recommended)
@@ -228,10 +217,10 @@ Runs seven checks:
 
 1. Container has internet connectivity.
 2. Playwright + Chromium are usable.
-3. Codex + OpenCode CLIs are available in-container.
+3. Codex CLI is available in-container.
 4. Host files outside the workspace are not visible by default.
 5. An explicitly mounted host directory is readable and writable (RW mount).
-6. OpenCode agents mount wiring is visible in dry-run, mounted read-only when a host source exists, and `--rw` overlaps with `~/.agents` are rejected.
+6. `--rw` mounts overlapping `~/.agents` are rejected.
 7. Instruction-source flag matrix passes (`scripts/test_instruction_flags.sh`).
 
 ```bash
@@ -286,7 +275,6 @@ CODEX_CONTAINER_SANDBOX_DISABLE_GIT_IDENTITY_SYNC=1 sandbox-agent ...
 - For `codex exec`, global AGENTS is mounted from canonical `SANDBOXED-AGENT-AGENTS.md` to container `~/.codex/AGENTS.md` (or from `--global-agents-file` when provided).
 - Extra mounts under `$HOME` are mapped to the same relative path under `/home/codex`.
 - `XDG_CACHE_HOME` is set to `$CODEX_HOME/cache` so tools like `uv` have a writable cache by default.
-- If host OpenCode agents are discoverable, they are mounted read-only to `~/.config/opencode/agents`.
 - Pi state in the container lives under `~/.pi/`, backed by a wrapper-managed host directory: `~/.local/state/sandbox-agent/pi` (disable with `CODEX_CONTAINER_SANDBOX_DISABLE_PI_MOUNT=1`).
 - If host `~/.pi/agent` exists, it is mounted read-only into the container at `~/.pi-host/agent` so you can reuse host extensions/prompts without allowing in-container mutation (disable with `CODEX_CONTAINER_SANDBOX_DISABLE_PI_HOST_AGENT_MOUNT=1`).
 - sandbox-agent does not seed pi harness plugins into `~/.pi/agent/settings.json`.
@@ -330,25 +318,6 @@ Controls:
 Pi prompt templates ride through the existing read-only `~/.pi/agent` mount. When `setup.sh`
 wires `~/.pi/agent/prompts` to `.agents/generated/pi/prompts`, the container sees the same
 templates at `~/.pi-host/agent/prompts` without any separate Codex prompt mount.
-
-### Reuse host OpenCode agents (optional)
-
-To keep OpenCode role definitions consistent with your host setup, the wrapper can mount:
-
-- `~/.config/opencode/agents` (preferred)
-- `~/.agents/subagents/generated/opencode/agents` (fallback)
-- `<workspace>/.agents/subagents/generated/opencode/agents` (repo-local fallback)
-
-All OpenCode agents mounts are read-only and target:
-
-- `~/.config/opencode/agents` inside the container
-
-Controls:
-
-- Override path:
-  - `CODEX_CONTAINER_SANDBOX_OPENCODE_AGENTS_DIR=/path/to/agents`
-- Disable:
-  - `CODEX_CONTAINER_SANDBOX_DISABLE_OPENCODE_AGENTS_MOUNT=1`
 
 ## LLM env passthrough
 
@@ -406,7 +375,6 @@ CODEX_CONTAINER_SANDBOX_DISABLE_LOCAL_BIN_MOUNT=1 sandbox-agent ...
 The image ships with a few common “skills dependencies” so you don’t need host mounts:
 
 - `codex`
-- `opencode`
 - `copilot`
 - `pi`
 - `imagemagick` (`convert`, `identify`) for `image-crop`
@@ -429,8 +397,6 @@ Defaults (best-effort, only when detected):
 
 - Mount `~/.local/share/uv/tools` read-only when `ttok` is detected as a uv tool install.
 - Also mount `~/.local/share/uv/python` read-only (needed for uv tool shebang interpreters) when present.
-- Mount host `~/.opencode/bin/opencode` read-only when present (fallback path; in-image `/usr/local/bin/opencode` remains preferred).
-
 Disable:
 
 ```bash

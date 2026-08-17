@@ -1,6 +1,6 @@
 ---
 name: sandbox-agent
-description: "Run agent CLIs (codex/copilot/opencode) inside a Podman container with full internet access but filesystem exposure limited to the repo root + explicit bind mounts."
+description: "Run agent CLIs (codex/copilot/pi) inside a Podman container with full internet access but filesystem exposure limited to the repo root + explicit bind mounts."
 ---
 
 # sandbox-agent

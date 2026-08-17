@@ -8,7 +8,6 @@ IMAGE ?= localhost/sandbox-agent:latest
 # manifest as ECONNRESET. The npmjs.com alias often behaves better.
 NPM_REGISTRY ?= https://registry.npmjs.com/
 CODEX_NPM_PKG ?= @openai/codex@latest
-OPENCODE_VERSION ?= latest
 EXTRA_CA_CERT_PATH ?=
 MQ_VERSION ?= 0.5.9
 # Pull the matching prebuilt mq release asset instead of compiling from source.
@@ -136,7 +135,6 @@ image:
 			--build-arg INSTALL_PI_PACKAGES="$(INSTALL_PI_PACKAGES)" \
 			--build-arg NPM_REGISTRY="$(NPM_REGISTRY)" \
 			--build-arg CODEX_NPM_PKG="$(CODEX_NPM_PKG)" \
-			--build-arg OPENCODE_VERSION="$(OPENCODE_VERSION)" \
 			-t "$(IMAGE)" -f Containerfile .
 
 install: image install-wrapper
@@ -146,7 +144,6 @@ install-wrapper:
 	@ln -sfn "$(CURDIR)/sandbox-agent" "$(BINDIR)/sandbox-agent"
 	@ln -sfn "$(CURDIR)/sandbox-agent-codex" "$(BINDIR)/sandbox-agent-codex"
 	@ln -sfn "$(CURDIR)/sandbox-agent-copilot" "$(BINDIR)/sandbox-agent-copilot"
-	@ln -sfn "$(CURDIR)/sandbox-agent-opencode" "$(BINDIR)/sandbox-agent-opencode"
 	@ln -sfn "$(CURDIR)/sandbox-agent-pi" "$(BINDIR)/sandbox-agent-pi"
 	@echo "Installed: $(BINDIR)/sandbox-agent -> $(CURDIR)/sandbox-agent"
 
